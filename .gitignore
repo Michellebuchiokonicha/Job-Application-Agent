@@ -2,7 +2,10 @@
 data/
 evals/*.jsonl
 credentials.json
-*.db/*.sqlite
+*.db
+*.sqlite
 token.json
 .venv/
 __pycache__/
+.DS_Store
+secrets/
