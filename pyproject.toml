@@ -8,12 +8,16 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "google-api-python-client>=2.201.0",
+    "google-auth-oauthlib>=1.5.0",
     "pydantic>=2.14.3",
+    "python-dotenv>=1.2.4",
     "typer>=0.28.0",
 ]
 
 [project.scripts]
-jobagent = "jobagent:main"
+jobagent = "jobagent.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]

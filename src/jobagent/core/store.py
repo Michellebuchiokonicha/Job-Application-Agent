@@ -7,11 +7,18 @@ update the status and append to the history, atomically, in one transaction.
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jobagent.core.states import INITIAL_STATUSES, Status, check_transition
+
+if (
+    TYPE_CHECKING
+):  # import only for type hints, avoiding a core -> gmail runtime dependency
+    from jobagent.gmail.parse import ParsedEmail
 
 
 class Source(StrEnum):
@@ -75,6 +82,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_creation_per_event
     ON status_changes (event_id) WHERE event_id IS NOT NULL AND from_status IS NULL;
 
 CREATE INDEX IF NOT EXISTS ix_status_changes_app ON status_changes (application_id);
+
+-- Emails exactly as fetched, stored once. Classification results will live in a
+-- separate table, so we can re-classify without re-fetching.
+CREATE TABLE IF NOT EXISTS raw_emails (
+    gmail_message_id  TEXT PRIMARY KEY,
+    thread_id         TEXT NOT NULL,
+    from_name         TEXT NOT NULL,
+    from_addr         TEXT NOT NULL,
+    to_addr           TEXT NOT NULL,
+    subject           TEXT NOT NULL,
+    received_at       TEXT NOT NULL,
+    body_text         TEXT NOT NULL,
+    raw_json          TEXT NOT NULL,      -- full Gmail API response, for re-parsing
+    fetched_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_raw_emails_thread ON raw_emails (thread_id);
+CREATE INDEX IF NOT EXISTS ix_raw_emails_received ON raw_emails (received_at);
 """
 
 
@@ -83,6 +108,8 @@ def _now() -> str:
 
 
 def connect(db_path: str | Path = ":memory:") -> sqlite3.Connection:
+    if str(db_path) != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     # isolation_level=None: no hidden transactions; we open them explicitly in _tx().
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.row_factory = sqlite3.Row  # rows behave like dicts: row["status"]
@@ -244,3 +271,33 @@ def history(conn: sqlite3.Connection, application_id: int) -> list[sqlite3.Row]:
         "SELECT * FROM status_changes WHERE application_id = ? ORDER BY id",
         (application_id,),
     ).fetchall()
+
+
+# --- Raw emails ---
+
+
+def raw_email_exists(conn: sqlite3.Connection, gmail_message_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM raw_emails WHERE gmail_message_id = ?", (gmail_message_id,)
+        ).fetchone()
+        is not None
+    )
+
+
+def insert_raw_email(
+    conn: sqlite3.Connection, email: "ParsedEmail", raw_json: str
+) -> bool:
+    """Store an email. Returns False if it was already stored (INSERT OR IGNORE)."""
+    row = {**asdict(email), "raw_json": raw_json, "fetched_at": _now()}
+    names = ", ".join(row)
+    marks = ", ".join("?" for _ in row)
+    cur = conn.execute(
+        f"INSERT OR IGNORE INTO raw_emails ({names}) VALUES ({marks})",
+        tuple(row.values()),
+    )
+    return cur.rowcount == 1
+
+
+def count_raw_emails(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM raw_emails").fetchone()[0]
