@@ -15,6 +15,14 @@ I'm the only user for now. I'm an ML engineer job-hunting in the UK. I already a
 
 It's built in phases. **Each phase must be usable on its own before the next one starts.**
 
+**End goal:** a (nearly) fully automated applier with a feedback loop. It learns from outcomes, rejections included, so rejections go down and interviews go up. I keep using Sorce every day while this is built; the agent never touches Sorce. It reads the results from Gmail, whatever tool was used to apply.
+
+**Build order (fast route to the applier):**
+1. Phase 1: Inbox agent + eval
+2. Phase 4 lite: Greenhouse job feed + matcher (a handful of target companies)
+3. Phase 5 lite: Greenhouse applier, behind the approval switch
+4. Then: notifier (Phase 2), prep (Phase 3), Lever/Ashby/Reed, the learning loop (Phase 6)
+
 ---
 
 ## 2. Working agreement (read this first, Claude Code)
@@ -57,21 +65,21 @@ The debrief writes outcomes to the store, and the matcher reads them. That close
 
 ### The centre of the design: the application state machine
 
-```
-discovered → matched → queued_for_review → submitted → acknowledged
-                                                     ├→ rejected
-                                                     ├→ assessment
-                                                     └→ interview → debriefed → offer | rejected
-```
+The full design (statuses, transition table, email → transition mapping, conflicts) is in **[docs/state-machine.md](docs/state-machine.md)**. In summary:
 
+- Active: `submitted`, `acknowledged`, `assessment`, `interview`, `offer` (+ Phase 4: `discovered`, `matched`, `queued_for_review`). Terminal: `rejected`, `withdrawn`, `accepted`, `declined`, `skipped`.
+- `debriefed` is **not** an application status. Debriefs belong to each `Interview` row, because an application can have several rounds.
+- Applications can be **created** directly at the status of the first email seen. That's how applications made through Sorce get bootstrapped.
 - Only allowed transitions; anything else raises an error. Every transition is logged with a timestamp and its cause (e.g. the email id).
 - Agents never edit status directly; they call `transition(application, new_status, reason)`.
+- Strict core, forgiving edges: `transition()` raises on invalid moves; the inbox agent catches the error, leaves the status unchanged and sends the email to review.
 
 ### Data model (first pass)
 
 - **Profile**: CV versions, master statements, preferences, **hard rules** (e.g. claims never to make)
 - **Job**: source, source_job_id, company, title, location, description, url, found_at
-- **Application**: job (nullable: see Phase 1), company, role, status, cv_version, cover_letter, screening_answers, match_confidence, created_at
+- **Application**: job (nullable: see Phase 1), company, role, status, **source** (`sorce` / `own_agent` / `manual` / `referral`), cv_version, cover_letter, screening_answers, match_confidence, created_at, plus the feedback-loop fields in docs/state-machine.md §6 (mostly null for Sorce applications, and that's expected)
+- **RawEmail**: the Gmail message exactly as fetched, stored once. Classification results live in EmailEvent, tagged with model and prompt version, so emails can be re-classified without fetching them again.
 - **EmailEvent**: gmail_message_id, thread_id, from, subject, received_at, category, extracted fields (JSON), model confidence, application_id (nullable), needs_review flag
 - **StatusChange**: application_id, from, to, reason, at
 - **Interview**: application_id, stage, datetime, interviewers, briefing (markdown), debrief notes
@@ -159,8 +167,12 @@ The briefing must **never invent facts**. Everything is cited or marked as unkno
 
 ### Phase 5: Apply agent *(last; hardest)*
 
-- Browser automation (Playwright) on public application forms.
-- Approval levels: `approve_every` (default) → `approve_uncertain` → `auto` only above a confidence threshold I set.
+- Browser automation (Playwright) on public application forms. Greenhouse first.
+- **Approval switch:** one setting, `manual` (I approve each one) or `auto`. In both modes:
+  - hard rules are always enforced (an application that would break one is blocked, not sent)
+  - anything uncertain (an unanswerable question, a CAPTCHA, a form it couldn't complete) comes to me
+  - a daily cap on auto-submissions
+  - turn on `auto` only once the evidence supports it, e.g. N manual approvals in a row with no edits
 - Store exactly what was submitted. **Never make claims that break my hard rules.**
 - Handle failures loudly: if a form can't be completed, tell me. Never fail silently.
 
@@ -168,6 +180,11 @@ The briefing must **never invent facts**. Everything is cited or marked as unkno
 
 - After an interview: I give a short voice or text note; it records the questions asked, my weak spots, and drafts a thank-you note.
 - Outcomes feed back into the matcher (which roles turn into interviews and offers) and into prep (my recurring weak spots).
+- **Rejection analysis (honest by design):**
+  1. Reasons are taken from an email only when stated explicitly, with an evidence quote that code checks is really in the email; otherwise `unknown`.
+  2. Code computes facts with no LLM: time to rejection, stage reached, ATS, template vs personal.
+  3. Patterns are always shown with counts, base rates and links to the applications behind them, and nothing is suggested below a minimum sample size.
+  4. I approve every suggested change (CV keywords, role targeting, etc.), and the agent then measures before vs after.
 
 ---
 
