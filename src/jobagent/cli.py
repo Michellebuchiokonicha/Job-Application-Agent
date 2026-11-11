@@ -29,7 +29,11 @@ app = typer.Typer(help="Personal job-application agent.", no_args_is_help=True)
 inbox_app = typer.Typer(help="Read and sort application emails.", no_args_is_help=True)
 apps_app = typer.Typer(help="Inspect tracked applications.", no_args_is_help=True)
 app.add_typer(inbox_app, name="inbox")
+eval_app = typer.Typer(
+    help="Measure classifiers against your labels.", no_args_is_help=True
+)
 app.add_typer(apps_app, name="apps")
+app.add_typer(eval_app, name="eval")
 
 console = Console()
 
@@ -226,6 +230,103 @@ def label(
         f"Saved to {labels_path}. Labelled {sum(counts.values())} in total: "
         + ", ".join(f"{c} {n}" for c, n in counts.most_common() if n)
     )
+
+
+# --- Evaluation ------------------------------------------------------------
+
+RARE_TARGETS = (Category.INTERVIEW_INVITE.value, Category.ASSESSMENT.value)
+RECALL_TARGET = 0.95
+
+
+@eval_app.command("inbox")
+def eval_inbox(
+    classifier: Annotated[
+        str, typer.Option(help="One of: always-other, keyword.")
+    ] = "keyword",
+    split: Annotated[
+        str, typer.Option(help="dev (default) or test. Use test once, at the end.")
+    ] = "dev",
+    labels_path: Annotated[Path, typer.Option("--labels")] = LABELS_PATH,
+) -> None:
+    """Score a classifier on your labels. Prints numbers only, never email text."""
+    from jobagent.eval.inbox import CLASSIFIERS, run_eval
+    from jobagent.eval.metrics import confusion_matrix, macro_f1, per_class
+
+    if classifier not in CLASSIFIERS:
+        console.print(
+            f"[red]Unknown classifier {classifier!r}.[/] Try: {', '.join(CLASSIFIERS)}"
+        )
+        raise typer.Exit(code=2)
+    if split not in ("dev", "test"):
+        console.print("[red]--split must be dev or test.[/]")
+        raise typer.Exit(code=2)
+    if split == "test":
+        console.print("[yellow]Test split: report this number, don't tune on it.[/]")
+
+    conn = _open_db(Settings.from_env())
+    run = run_eval(conn, load_labels(labels_path), CLASSIFIERS[classifier], split)
+    if not run.y_true:
+        console.print(
+            f"No labelled emails in the {split} split yet. Run `jobagent label`."
+        )
+        raise typer.Exit(code=1)
+
+    labels = [c.value for c in Category]
+    report = per_class(run.y_true, run.y_pred, labels)
+
+    table = Table(
+        "class",
+        "precision",
+        "recall",
+        "f1",
+        "support",
+        title=f"{classifier} on {split} ({len(run.y_true)} emails)",
+    )
+    for c in labels:
+        r = report[c]
+        table.add_row(
+            c,
+            f"{r['precision']:.2f}",
+            f"{r['recall']:.2f}",
+            f"{r['f1']:.2f}",
+            str(r["support"]),
+        )
+    console.print(table)
+
+    # The number that matters most: of the real interviews/assessments, how many caught?
+    caught = sum(
+        t == p for t, p in zip(run.y_true, run.y_pred, strict=True) if t in RARE_TARGETS
+    )
+    total = sum(t in RARE_TARGETS for t in run.y_true)
+    rare_recall = caught / total if total else 0.0
+    colour = "green" if rare_recall >= RECALL_TARGET else "red"
+    console.print(
+        f"macro F1 {macro_f1(report):.2f} · interview+assessment recall "
+        f"[{colour}]{rare_recall:.2f}[/] ({caught}/{total}, target {RECALL_TARGET})"
+    )
+
+    matrix = confusion_matrix(run.y_true, run.y_pred, labels)
+    short = {
+        "offer": "off",
+        "interview_invite": "int",
+        "assessment": "ass",
+        "rejection": "rej",
+        "recruiter_message": "rec",
+        "confirmation": "conf",
+        "other": "oth",
+    }
+    cm = Table(
+        "",
+        *(short[c] for c in labels),
+        title="Confusion matrix (rows = your label, columns = predicted)",
+    )
+    for t in labels:
+        cm.add_row(short[t], *(str(matrix[t][p] or ".") for p in labels))
+    console.print(cm)
+
+    avg_ms = 1000 * sum(run.latencies_s) / len(run.latencies_s)
+    note = f" · {run.missing} labelled emails missing from DB" if run.missing else ""
+    console.print(f"[dim]avg latency {avg_ms:.2f} ms/email{note}[/]")
 
 
 if __name__ == "__main__":
