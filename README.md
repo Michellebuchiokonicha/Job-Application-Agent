@@ -23,9 +23,9 @@ cp .env.example .env     # then fill in values
    app name `jobagent`, your email as support/contact, Audience **External**.
 4. **Audience → Test users** → add your own Gmail address.
 5. **Clients → Create client** → type **Desktop app** → download the JSON.
-6. Save it as `secrets/credentials.json` (gitignored).
+6. Save it as `~/.config/jobagent/credentials.json` (outside the repo and iCloud-synced folders).
 7. `uv run jobagent inbox fetch --since 2026-10-01`: a browser opens once to approve
-   **read-only** access; the token is saved to `secrets/token.json`.
+   **read-only** access; the token is saved to `~/.config/jobagent/token.json`. Emails are stored in `~/.local/share/jobagent/jobagent.db`.
 
 In "Testing" mode Google expires the login roughly every 7 days; the next run just
 opens the browser again.
