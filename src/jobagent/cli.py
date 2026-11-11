@@ -1,15 +1,29 @@
 """Command-line entry point: `uv run jobagent ...`."""
 
+from collections import Counter
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress
 from rich.table import Table
+from rich.text import Text
 
+from jobagent.core.categories import Category
 from jobagent.core.config import Settings
 from jobagent.core.states import Status
-from jobagent.core.store import connect, count_raw_emails, init_db, list_applications
+from jobagent.core.store import (
+    connect,
+    count_raw_emails,
+    get_raw_email,
+    init_db,
+    list_applications,
+)
+from jobagent.core.text import clean_for_reading
+from jobagent.eval.labels import LABELS_PATH, append_label, build_queue, load_labels
 
 app = typer.Typer(help="Personal job-application agent.", no_args_is_help=True)
 inbox_app = typer.Typer(help="Read and sort application emails.", no_args_is_help=True)
@@ -42,15 +56,35 @@ def inbox_fetch(
 
     settings = Settings.from_env()
     conn = _open_db(settings)
-    creds = get_credentials(settings.gmail_credentials_path, settings.gmail_token_path)
+    try:
+        creds = get_credentials(
+            settings.gmail_credentials_path, settings.gmail_token_path
+        )
+    except FileNotFoundError as e:
+        # An expected setup problem, not a bug: a clear message instead of a traceback.
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1) from None
     service = build_service(creds)
 
     since_utc = since.replace(tzinfo=UTC)
     console.print(f"Query: [cyan]{settings.gmail_query}[/] since {since:%Y-%m-%d}")
-    stats = fetch_new(service, conn, settings.gmail_query, since_utc)
+    with Progress(console=console) as progress:
+        task = progress.add_task("Downloading", total=None)
+
+        def on_progress(done: int, total: int) -> None:
+            progress.update(task, completed=done, total=total)
+
+        try:
+            stats = fetch_new(
+                service, conn, settings.gmail_query, since_utc, on_progress
+            )
+        except KeyboardInterrupt:
+            console.print("[yellow]Stopped. Re-run to resume where you left off.[/]")
+            raise typer.Exit(code=130) from None
     console.print(
         f"Matched {stats.listed}, already stored {stats.already_stored}, "
-        f"[green]new {stats.stored}[/]. Total stored: {count_raw_emails(conn)}"
+        f"[green]new {stats.stored}[/], rate-limit retries {stats.retries}. "
+        f"Total stored: {count_raw_emails(conn)}"
     )
 
 
@@ -74,6 +108,124 @@ def apps_list(
             r["updated_at"][:10],
         )
     console.print(table if rows else "No applications yet.")
+
+
+# --- Labelling -------------------------------------------------------------
+
+LABEL_KEYS: dict[str, Category] = {
+    "o": Category.OFFER,
+    "i": Category.INTERVIEW_INVITE,
+    "a": Category.ASSESSMENT,
+    "r": Category.REJECTION,
+    "t": Category.RECRUITER_MESSAGE,
+    "c": Category.CONFIRMATION,
+    "x": Category.OTHER,
+}
+KEY_HELP = (
+    "[bold]o[/] offer   [bold]i[/] interview   [bold]a[/] assessment   "
+    "[bold]r[/] rejection\n"
+    "[bold]t[/] recruiter (a real person writing about a job)   "
+    "[bold]c[/] confirmation   [bold]x[/] other (not job-related)\n"
+    "[dim]s skip · u undo last label · m show more · q quit[/]"
+)
+PREVIEW_CHARS = 1500
+TARGET_PER_RARE_CLASS = 30
+
+
+def _show_email(row, remaining: int, counts: Counter, chars: int, status: str) -> None:
+    body = clean_for_reading(row["body_text"]) or "(empty body)"
+    shown = body[:chars]
+    if len(body) > chars:
+        shown += f"\n\n… {len(body) - chars} more characters (press m)"
+    header = (
+        f"{row['from_name']} <{row['from_addr']}>\n"
+        f"{row['received_at'][:16].replace('T', ' ')}"
+    )
+    console.clear()
+    console.print(
+        f"[dim]{remaining} left · {sum(counts.values())} labelled · "
+        f"interview {counts['interview_invite']}/{TARGET_PER_RARE_CLASS} · "
+        f"assessment {counts['assessment']}/{TARGET_PER_RARE_CLASS}[/]"
+    )
+    # Text(...) prints email content literally: an email containing "[red]"
+    # must not be interpreted as Rich markup.
+    console.print(
+        Panel(
+            Text(shown), title=Text(row["subject"] or "(no subject)"), subtitle=header
+        )
+    )
+    console.print(KEY_HELP)
+    if status:
+        console.print(Text(status, style="bold yellow"))
+
+
+@app.command("label")
+def label(
+    labels_path: Annotated[
+        Path, typer.Option("--labels", help="Where labels are saved (IDs only).")
+    ] = LABELS_PATH,
+) -> None:
+    """Hand-label emails for the inbox eval. Saves after every key; quit any time."""
+    conn = _open_db(Settings.from_env())
+    labels = load_labels(labels_path)
+    counts = Counter(r["label"] for r in labels.values())
+    queue = build_queue(conn, set(labels))
+    # Undo stack of email IDs, oldest first. Seeded from the file, so undo also
+    # reaches labels made in earlier sessions.
+    undo_stack = [
+        r["gmail_message_id"]
+        for r in sorted(labels.values(), key=lambda r: r["labelled_at"])
+    ]
+    if not queue and not undo_stack:
+        console.print("Nothing to label.")
+        return
+
+    i = 0
+    chars = PREVIEW_CHARS
+    status = ""
+    with console.screen():  # a separate screen, like vim/less: no scrollback pile-up
+        while i < len(queue):
+            mid = queue[i]
+            _show_email(get_raw_email(conn, mid), len(queue) - i, counts, chars, status)
+            status = ""
+
+            try:
+                key = typer.getchar().lower()
+            except (KeyboardInterrupt, EOFError):
+                key = "q"
+
+            if key in LABEL_KEYS:
+                category = LABEL_KEYS[key]
+                append_label(labels_path, mid, category)
+                counts[category] += 1
+                undo_stack.append(mid)
+                status = f"✓ Saved previous email as {category.value}"
+                i, chars = i + 1, PREVIEW_CHARS
+            elif key == "s":
+                status = "Skipped previous email (it will come back next session)"
+                i, chars = i + 1, PREVIEW_CHARS
+            elif key == "m":
+                chars *= 4
+            elif key == "u":
+                if not undo_stack:
+                    status = "Nothing to undo"
+                    continue
+                undone = undo_stack.pop()
+                previous = load_labels(labels_path)[undone]["label"]
+                append_label(labels_path, undone, None)
+                counts[previous] -= 1
+                queue.insert(i, undone)  # show it again, right now
+                status = f"↶ Removed label '{previous}'. Choose a new one."
+                chars = PREVIEW_CHARS
+            elif key in ("q", ""):  # "" = end of input (e.g. piped/tests)
+                break
+            else:
+                status = f"Unknown key {key!r}. Use the keys listed above."
+
+    console.print(
+        f"Saved to {labels_path}. Labelled {sum(counts.values())} in total: "
+        + ", ".join(f"{c} {n}" for c, n in counts.most_common() if n)
+    )
 
 
 if __name__ == "__main__":

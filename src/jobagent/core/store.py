@@ -108,10 +108,13 @@ def _now() -> str:
 
 
 def connect(db_path: str | Path = ":memory:") -> sqlite3.Connection:
-    if str(db_path) != ":memory:":
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    on_disk = str(db_path) != ":memory:"
+    if on_disk:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # isolation_level=None: no hidden transactions; we open them explicitly in _tx().
     conn = sqlite3.connect(db_path, isolation_level=None)
+    if on_disk:
+        Path(db_path).chmod(0o600)  # it holds your email: readable by you only
     conn.row_factory = sqlite3.Row  # rows behave like dicts: row["status"]
     conn.execute("PRAGMA foreign_keys = ON")  # SQLite ignores REFERENCES unless enabled
     return conn
@@ -297,6 +300,18 @@ def insert_raw_email(
         tuple(row.values()),
     )
     return cur.rowcount == 1
+
+
+def get_raw_email(conn: sqlite3.Connection, gmail_message_id: str) -> sqlite3.Row:
+    """One stored email, without the bulky raw_json column."""
+    row = conn.execute(
+        "SELECT gmail_message_id, thread_id, from_name, from_addr, subject, "
+        "received_at, body_text FROM raw_emails WHERE gmail_message_id = ?",
+        (gmail_message_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(gmail_message_id)
+    return row
 
 
 def count_raw_emails(conn: sqlite3.Connection) -> int:
