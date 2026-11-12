@@ -17,6 +17,10 @@ DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "jobagent" / "jobagent.db"
 # Same reason for secrets: the token grants read access to your Gmail.
 SECRETS_DIR = Path.home() / ".config" / "jobagent"
 
+# Local model: emails never leave the machine.
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_INBOX_MODEL = "qwen3:8b"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -24,6 +28,8 @@ class Settings:
     gmail_token_path: Path
     gmail_query: str
     db_path: Path
+    ollama_host: str = DEFAULT_OLLAMA_HOST
+    inbox_model: str = DEFAULT_INBOX_MODEL
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -37,4 +43,6 @@ class Settings:
             ).expanduser(),
             gmail_query=os.getenv("GMAIL_QUERY") or DEFAULT_GMAIL_QUERY,
             db_path=Path(os.getenv("DB_PATH") or DEFAULT_DB_PATH).expanduser(),
+            ollama_host=os.getenv("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST,
+            inbox_model=os.getenv("INBOX_MODEL") or DEFAULT_INBOX_MODEL,
         )

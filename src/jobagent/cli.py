@@ -258,7 +258,7 @@ RECALL_TARGET = 0.95
 @eval_app.command("inbox")
 def eval_inbox(
     classifier: Annotated[
-        str, typer.Option(help="One of: always-other, keyword.")
+        str, typer.Option(help="One of: always-other, keyword, llm.")
     ] = "keyword",
     split: Annotated[
         str, typer.Option(help="dev (default) or test. Use test once, at the end.")
@@ -269,9 +269,10 @@ def eval_inbox(
     from jobagent.eval.inbox import CLASSIFIERS, run_eval
     from jobagent.eval.metrics import confusion_matrix, macro_f1, per_class
 
-    if classifier not in CLASSIFIERS:
+    choices = [*CLASSIFIERS, "llm"]
+    if classifier not in choices:
         console.print(
-            f"[red]Unknown classifier {classifier!r}.[/] Try: {', '.join(CLASSIFIERS)}"
+            f"[red]Unknown classifier {classifier!r}.[/] Try: {', '.join(choices)}"
         )
         raise typer.Exit(code=2)
     if split not in ("dev", "test"):
@@ -280,8 +281,41 @@ def eval_inbox(
     if split == "test":
         console.print("[yellow]Test split: report this number, don't tune on it.[/]")
 
-    conn = _open_db(Settings.from_env())
-    run = run_eval(conn, load_labels(labels_path), CLASSIFIERS[classifier], split)
+    settings = Settings.from_env()
+    llm = None
+    if classifier == "llm":
+        import ollama
+
+        from jobagent.inbox.classify import PROMPT_VERSION, LLMClassifier
+
+        llm = LLMClassifier(
+            ollama.Client(host=settings.ollama_host), settings.inbox_model
+        )
+        classify = llm
+        console.print(
+            f"Model [cyan]{settings.inbox_model}[/] · prompt {PROMPT_VERSION} · "
+            "running locally"
+        )
+    else:
+        classify = CLASSIFIERS[classifier]
+
+    conn = _open_db(settings)
+    with Progress(console=console, transient=True) as progress:
+        task = progress.add_task("Classifying", total=None)
+        try:
+            run = run_eval(
+                conn,
+                load_labels(labels_path),
+                classify,
+                split,
+                on_progress=lambda d, t: progress.update(task, completed=d, total=t),
+            )
+        except ConnectionError:
+            console.print(
+                f"[red]Can't reach Ollama at {settings.ollama_host}.[/] "
+                "Start it with `ollama serve`."
+            )
+            raise typer.Exit(code=1) from None
     if not run.y_true:
         console.print(
             f"No labelled emails in the {split} split yet. Run `jobagent label`."
@@ -344,6 +378,11 @@ def eval_inbox(
     avg_ms = 1000 * sum(run.latencies_s) / len(run.latencies_s)
     note = f" · {run.missing} labelled emails missing from DB" if run.missing else ""
     console.print(f"[dim]avg latency {avg_ms:.2f} ms/email{note}[/]")
+    if llm is not None:
+        console.print(
+            f"Invalid model output (counted as 'other'): {llm.errors} · "
+            f"evidence quote not found in email: {llm.unsupported}"
+        )
 
 
 if __name__ == "__main__":

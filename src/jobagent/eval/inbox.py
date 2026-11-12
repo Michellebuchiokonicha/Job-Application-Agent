@@ -46,11 +46,14 @@ def run_eval(
     labels: dict[str, dict],
     classify: Classifier,
     split: str,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> EvalRun:
     run = EvalRun()
-    for mid, record in sorted(labels.items()):  # sorted: stable order between runs
-        if record["split"] != split:
-            continue
+    # sorted: stable order between runs
+    todo = sorted((m, r) for m, r in labels.items() if r["split"] == split)
+    for done, (mid, record) in enumerate(todo, start=1):
+        if on_progress:
+            on_progress(done - 1, len(todo))
         try:
             row = get_raw_email(conn, mid)
         except KeyError:
@@ -65,4 +68,6 @@ def run_eval(
 
         run.y_true.append(record["label"])
         run.y_pred.append(Category(predicted).value)
+    if on_progress:
+        on_progress(len(todo), len(todo))
     return run
