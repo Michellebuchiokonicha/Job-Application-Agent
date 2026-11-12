@@ -115,3 +115,24 @@ def test_undo_with_nothing_to_undo(env):
     result = run(labels, "uq")
     assert "Nothing to undo" in result.output
     assert load_labels(labels) == {}
+
+
+def test_split_option_shows_only_that_split(tmp_path, monkeypatch):
+    from jobagent.eval.labels import split_for
+
+    db = tmp_path / "s.db"
+    conn = connect(db)
+    init_db(conn)
+    for i in range(30):
+        raw = message(part("text/plain", "b"), msg_id=f"m{i}", subject="S")
+        insert_raw_email(conn, parse_message(raw), json.dumps(raw))
+    conn.close()
+    monkeypatch.setenv("DB_PATH", str(db))
+    labels = tmp_path / "l.jsonl"
+
+    runner.invoke(
+        app, ["label", "--labels", str(labels), "--split", "test"], input="x" * 30
+    )
+    saved = load_labels(labels)
+    assert saved  # some test-split emails exist among 30
+    assert all(split_for(mid) == "test" for mid in saved)

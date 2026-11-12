@@ -4,13 +4,18 @@ import html
 import re
 from urllib.parse import urlsplit
 
-_URL = re.compile(r"https?://[^\s<>()\"']+")
+# Brackets excluded: emails often wrap links as [https://...], and a stray "[" in
+# the host makes urlsplit think it's an IPv6 address and raise.
+_URL = re.compile(r"https?://[^\s<>()\[\]\"']+")
 # Long tokens with no spaces (base64-ish tracking IDs that survive outside a URL).
 _JUNK_TOKEN = re.compile(r"\S{80,}")
 
 
 def _short_link(match: re.Match[str]) -> str:
-    host = urlsplit(match.group()).hostname or "link"
+    try:
+        host = urlsplit(match.group()).hostname or "link"
+    except ValueError:  # malformed URL in someone's email: show it, never crash
+        return "[link]"
     return f"[link: {host.removeprefix('www.')}]"
 
 

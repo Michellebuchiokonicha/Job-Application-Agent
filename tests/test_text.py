@@ -26,3 +26,19 @@ def test_long_tracking_token_removed():
 def test_normal_text_untouched():
     text = "Thank you for applying to the ML Engineer role."
     assert clean_for_reading(text) == text
+
+
+def test_bracketed_link():
+    assert clean_for_reading("[https://example.com/a]") == "[[link: example.com]]"
+
+
+def test_malformed_url_does_not_crash():
+    # A "[" in the host made urlsplit raise "Invalid IPv6 URL" and crashed labelling.
+    # The property that matters: any text in, a string out, no exception.
+    for text in [
+        "https://exa[mple.com/x",
+        "http://]bad/",
+        "https://[::1",
+        "see [https://x",
+    ]:
+        assert isinstance(clean_for_reading(text), str)

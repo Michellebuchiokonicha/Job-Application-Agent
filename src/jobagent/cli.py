@@ -23,7 +23,13 @@ from jobagent.core.store import (
     list_applications,
 )
 from jobagent.core.text import clean_for_reading
-from jobagent.eval.labels import LABELS_PATH, append_label, build_queue, load_labels
+from jobagent.eval.labels import (
+    LABELS_PATH,
+    append_label,
+    build_queue,
+    load_labels,
+    split_for,
+)
 
 app = typer.Typer(help="Personal job-application agent.", no_args_is_help=True)
 inbox_app = typer.Typer(help="Read and sort application emails.", no_args_is_help=True)
@@ -168,12 +174,23 @@ def label(
     labels_path: Annotated[
         Path, typer.Option("--labels", help="Where labels are saved (IDs only).")
     ] = LABELS_PATH,
+    split: Annotated[
+        str | None,
+        typer.Option(help="Only show emails from this split: dev or test."),
+    ] = None,
 ) -> None:
     """Hand-label emails for the inbox eval. Saves after every key; quit any time."""
+    if split not in (None, "dev", "test"):
+        console.print("[red]--split must be dev or test.[/]")
+        raise typer.Exit(code=2)
     conn = _open_db(Settings.from_env())
     labels = load_labels(labels_path)
-    counts = Counter(r["label"] for r in labels.values())
+    counts = Counter(
+        r["label"] for r in labels.values() if split is None or r["split"] == split
+    )
     queue = build_queue(conn, set(labels))
+    if split:
+        queue = [mid for mid in queue if split_for(mid) == split]
     # Undo stack of email IDs, oldest first. Seeded from the file, so undo also
     # reaches labels made in earlier sessions.
     undo_stack = [

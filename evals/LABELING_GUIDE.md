@@ -34,6 +34,9 @@ Run `uv run jobagent label`. Labels are saved to `evals/inbox_labels.jsonl` (IDs
 | Recruiter sends a job they think suits you (you haven't applied) | `recruiter_message` | A real person, about a job. |
 | A mass "jobs you might like" email, even from a recruiting agency | `other` | Automated, not about your application. |
 | Offer to "book a call" from a careers coach or paid service | `other` | Marketing, not a hiring process. |
+| A reply in a thread ("Re: …"), including copies of your own reply relayed back by Sorce | What the thread is about at that point (e.g. still arranging a call → `interview_invite`) | The latest message in the thread decides. |
+| An email listing many jobs (Indeed/LinkedIn/Sorce alert), even if listings mention "assessment" or "interview" | `other` | Automated alert; not about one of your applications. |
+| A single-job "job match" / "invite to apply" from a job board, even if "sent by the employer" | `other` | Template sent to many people. Test: could it go to 1,000 people unchanged except the name? Then `other`. |
 | An empty body or an unreadable email | `s` (skip) | Don't guess. |
 | Not sure after reading it all (press `m`) | `s` (skip) | A wrong label does more damage than a missing one. |
 
