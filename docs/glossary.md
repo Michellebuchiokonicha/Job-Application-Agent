@@ -142,3 +142,7 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Label noise**: Mistakes in the human labels themselves. Here: a review of 10 model/human disagreements on dev found 4 where the human label was wrong.
 
 **One-sided relabelling (bias)**: Fixing labels only where the model disagrees. Every correction can only raise the model's score, so the score becomes inflated. Acceptable on dev for error analysis; never on test.
+
+**Regression**: A change that fixes one thing but breaks something that used to work. Here: prompt v2 fixed all 6 targeted errors but created 9 new ones (7 `other` → confirmation, 2 assessment → confirmation). That's why the whole eval is rerun after every change.
+
+**Precision/recall trade-off**: Making a class easier to predict catches more of it (recall up) but also produces more false alarms (precision down). Prompt v2 took confirmation recall from 0.88 to 1.00 and its precision from 0.97 to 0.82.

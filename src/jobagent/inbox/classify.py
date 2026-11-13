@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from jobagent.core.categories import Category
 
-PROMPT_VERSION = "v1"  # bump when the prompt changes, so eval runs are comparable
+PROMPT_VERSION = "v2"  # bump when the prompt changes, so eval runs are comparable
 MAX_BODY_CHARS = 4000  # the start of an email carries its meaning
 
 SYSTEM_PROMPT = """\
@@ -28,7 +28,9 @@ test, one-way video interview, aptitude/personality test, or a reminder about on
 - rejection: they are not moving forward with the candidate, at any stage.
 - recruiter_message: a real person writes personally about a job, and it is none \
 of the above (e.g. agency outreach, a question, a follow-up).
-- confirmation: an automated "we received your application".
+- confirmation: an automated acknowledgement that the candidate's application was \
+received, e.g. "we received your application", "thank you for applying", \
+"thank you for your interest in the role". Nothing is decided and no action is needed.
 - other: everything else: job alerts and "job match" emails (even for one job, even \
 if listings mention interviews or assessments), newsletters, marketing, community \
 events, account/security emails, personal mail.
@@ -39,6 +41,10 @@ assessment, rejection, recruiter_message, confirmation, other.
 - "After interviewing many candidates, unfortunately..." is a rejection.
 - A rejection that says "we'll keep your CV on file" is still a rejection.
 - A confirmation saying a test *may* follow later is a confirmation.
+- "Thanks for completing the assessment, we'll review your responses" is a \
+confirmation: the test is done and nothing is decided yet.
+- A rejection must be about the candidate's own job application. Declining any \
+other request (e.g. "we can't share that information") is other.
 - In a reply thread ("Re: ..."), classify by what the thread is about now.
 - Template emails that could go to 1,000 people unchanged except the name are \
 never recruiter_message.

@@ -12,7 +12,7 @@ Run `uv run jobagent label`. Labels are saved to `evals/inbox_labels.jsonl` (IDs
 | `a` | `assessment` | They send a test to complete: coding challenge, take-home, online test, video interview recorded on your own (HireVue-style), personality/aptitude test. |
 | `r` | `rejection` | They're not moving forward, at any stage. |
 | `t` | `recruiter_message` | A real person writes to you about a job, and it isn't one of the above: agency recruiter outreach, a hiring manager's question, a follow-up, "are you still interested?" |
-| `c` | `confirmation` | An automated "we received your application", including via Sorce (eprivatemail.com). |
+| `c` | `confirmation` | An automated acknowledgement of your application ("we received your application", "thank you for applying", "thank you for your interest in the role"), including via Sorce (eprivatemail.com). |
 | `x` | `other` | Everything else: job alerts, newsletters, marketing, community events, calendar invites unrelated to a job, account/security emails, personal mail. |
 
 ## When several fit, the highest one wins
@@ -32,6 +32,7 @@ Run `uv run jobagent label`. Labels are saved to `evals/inbox_labels.jsonl` (IDs
 | Interview **reminder** or **reschedule** for an interview already booked | `interview_invite` | It's still about the interview; missing it is costly. |
 | Assessment **reminder** ("your test expires in 2 days") | `assessment` | Same reason: costly to miss. |
 | "Thanks for **completing** the assessment, we'll review your responses" (even with a feedback/insights link) | `confirmation` | The test is done; nothing to act on, nothing decided. |
+| Someone declines a request that isn't your job application ("we can't share that information") | `other` | A rejection is only about your own application. |
 | Recruiter sends a job they think suits you (you haven't applied) | `recruiter_message` | A real person, about a job. |
 | A mass "jobs you might like" email, even from a recruiting agency | `other` | Automated, not about your application. |
 | Offer to "book a call" from a careers coach or paid service | `other` | Marketing, not a hiring process. |

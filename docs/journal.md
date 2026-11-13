@@ -143,3 +143,31 @@ from 39/40 to 39/39. **That isn't a better model.** Nothing about the model chan
 labels only where it disagreed, so the score could only go up. 7 real errors remain, mostly
 confirmations it files as `other`. Those are what prompt v2 targets. This was also the first
 run saved automatically to `evals/runs/`.
+
+**What the remaining errors were.** Most were plain "Thank you for applying / for your interest"
+acknowledgements that the model filed as `other`: the prompt defined a confirmation too narrowly.
+One was a "we've received your completed assessment" email, for which the labelling guide
+*already had a rule*, but the rule had never been copied into the prompt. That's **drift**
+between two documents that should say the same thing. One was a non-job email that used the
+word "applicant" and declined something, which the model read as a rejection.
+
+### 2026-11-13: Prompt v2
+
+Three changes, one for each kind of error found in the review, all written as general rules
+rather than copies of specific emails (to avoid overfitting to dev):
+
+1. **Wider confirmation definition**, with example wordings ("thank you for applying", "thank
+   you for your interest in the role") and the test "nothing is decided and no action is needed".
+2. **The assessment-completed rule**, copied from the labelling guide into the prompt to fix
+   the drift.
+3. **A rejection must be about the candidate's own application.** Declining any other request
+   is `other`.
+
+The labelling guide was updated to match, so the two documents say the same thing again.
+
+**Prompt v2 result on dev: every targeted error was fixed, and total errors still went up (7 → 9).**
+Widening the definition of "confirmation" made the model see confirmations everywhere: 7
+`other` emails and, worse, 2 real assessments became confirmations. A fix that breaks something
+nearby is a **regression**, and this is why you always rerun the whole eval, not just the cases
+you meant to fix. A small trap: 37/39 = 0.949 was printed rounded as "0.95", which *looks* like it
+meets a ≥ 0.95 target but doesn't.
