@@ -3,10 +3,13 @@
 Scoring lives in metrics.py; this module only produces (y_true, y_pred) pairs.
 """
 
+import json
 import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 
 from jobagent.core.categories import Category
 from jobagent.core.store import get_raw_email
@@ -35,6 +38,7 @@ CLASSIFIERS: dict[str, Classifier] = {
 
 @dataclass
 class EvalRun:
+    ids: list[str] = field(default_factory=list)  # gmail_message_id per row
     y_true: list[str] = field(default_factory=list)
     y_pred: list[str] = field(default_factory=list)
     latencies_s: list[float] = field(default_factory=list)
@@ -66,8 +70,33 @@ def run_eval(
         predicted = classify(subject, body)
         run.latencies_s.append(time.perf_counter() - start)
 
+        run.ids.append(mid)
         run.y_true.append(record["label"])
         run.y_pred.append(Category(predicted).value)
     if on_progress:
         on_progress(len(todo), len(todo))
     return run
+
+
+def disagreements(run: EvalRun) -> list[tuple[str, str, str]]:
+    """(gmail_message_id, your label, predicted) for every row they differ."""
+    return [
+        (mid, t, p)
+        for mid, t, p in zip(run.ids, run.y_true, run.y_pred, strict=True)
+        if t != p
+    ]
+
+
+def save_run(runs_dir: Path, result: dict) -> Path:
+    """Write one eval run to its own timestamped JSON file. Returns the path.
+
+    One file per run (not appending to one file): runs are never overwritten, and
+    each file is a self-contained record of what was measured, with what, and when.
+    """
+    now = datetime.now(UTC)
+    record = {"timestamp": now.isoformat(timespec="seconds"), **result}
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{now:%Y%m%dT%H%M%S}-{result['classifier']}-{result['split']}.json"
+    path = runs_dir / name
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return path

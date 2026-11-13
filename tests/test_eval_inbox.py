@@ -74,3 +74,75 @@ def test_eval_command_prints_scores_not_email_text(tmp_path, monkeypatch):
     assert "interview+assessment recall" in out
     assert "1.00" in out
     assert "SECRET-BODY" not in out
+
+
+def test_disagreements():
+    from jobagent.eval.inbox import EvalRun, disagreements
+
+    run = EvalRun(
+        ids=["a", "b"], y_true=["other", "rejection"], y_pred=["other", "other"]
+    )
+    assert disagreements(run) == [("b", "rejection", "other")]
+
+
+@pytest.fixture
+def review_env(tmp_path, monkeypatch):
+    """Two dev emails: keyword gets one right, one wrong."""
+    from jobagent.eval.labels import append_label, split_for
+
+    db = tmp_path / "r.db"
+    c = connect(db)
+    init_db(c)
+    dev = [m for m in (f"m{i}" for i in range(40)) if split_for(m) == "dev"][:2]
+    add(c, dev[0], "Interview invitation", "pick a time")  # keyword: interview ✓
+    add(c, dev[1], "Hello", "no keywords here")  # keyword: other ✗
+    c.close()
+    labels = tmp_path / "l.jsonl"
+    append_label(labels, dev[0], Category.INTERVIEW_INVITE)
+    append_label(labels, dev[1], Category.REJECTION)
+    monkeypatch.setenv("DB_PATH", str(db))
+    return labels, dev
+
+
+def review(labels, keys, split="dev"):
+    from typer.testing import CliRunner
+
+    from jobagent.cli import app
+
+    args = ["eval", "inbox", "--labels", str(labels), "--split", split, "--show-errors"]
+    return CliRunner().invoke(app, args, input=keys)
+
+
+def test_show_errors_refuses_test_split(review_env):
+    labels, _ = review_env
+    result = review(labels, "", split="test")
+    assert result.exit_code == 2
+    assert "test stays unseen" in result.output
+
+
+def test_show_errors_lists_only_disagreements(review_env):
+    labels, _ = review_env
+    result = review(labels, " q")  # any key to start, then quit
+    assert "1 disagreements" in result.output
+    assert "You: rejection" in result.output
+    assert "keyword: other" in result.output
+
+
+def test_show_errors_can_correct_your_label(review_env):
+    from jobagent.eval.labels import load_labels
+
+    labels, dev = review_env
+    review(labels, " xq")  # start, relabel as other, quit
+    assert load_labels(labels)[dev[1]]["label"] == "other"
+
+
+def test_save_run(tmp_path):
+    from jobagent.eval.inbox import save_run
+
+    path = save_run(
+        tmp_path / "runs", {"classifier": "keyword", "split": "dev", "n": 3}
+    )
+    record = json.loads(path.read_text())
+    assert record["n"] == 3
+    assert "timestamp" in record
+    assert path.name.endswith("-keyword-dev.json")

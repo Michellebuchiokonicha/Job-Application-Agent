@@ -142,7 +142,14 @@ PREVIEW_CHARS = 1500
 TARGET_PER_RARE_CLASS = 30
 
 
-def _show_email(row, remaining: int, counts: Counter, chars: int, status: str) -> None:
+def _show_email(
+    row,
+    remaining: int,
+    counts: Counter,
+    chars: int,
+    status: str,
+    suggestion=None,
+) -> None:
     body = clean_for_reading(row["body_text"]) or "(empty body)"
     shown = body[:chars]
     if len(body) > chars:
@@ -164,9 +171,41 @@ def _show_email(row, remaining: int, counts: Counter, chars: int, status: str) -
             Text(shown), title=Text(row["subject"] or "(no subject)"), subtitle=header
         )
     )
+    if suggestion is not None:
+        line = Text.assemble(
+            ("Model suggests: ", "cyan"),
+            (suggestion.category.value, "bold cyan"),
+            "  ",
+            (f"“{suggestion.evidence_quote}”", "italic"),
+            ("" if suggestion.evidence_found else "  (quote not in email)", "dim"),
+            ("   Enter = accept", "bold"),
+        )
+        console.print(line)
     console.print(KEY_HELP)
     if status:
         console.print(Text(status, style="bold yellow"))
+
+
+def _make_predictor(settings: Settings):
+    """The local model's predict function. A separate function so tests can swap it."""
+    import ollama
+
+    from jobagent.inbox.classify import LLMClassifier
+
+    client = ollama.Client(host=settings.ollama_host)
+    return LLMClassifier(client, settings.inbox_model).predict
+
+
+ENTER = ("\r", "\n")
+# Down arrow (normal and "application" cursor mode) = show more; other arrows explained.
+ARROW_KEYS = {
+    "\x1b[B": "m",
+    "\x1bOB": "m",
+    **{
+        seq: "arrow"
+        for seq in ("\x1b[A", "\x1b[C", "\x1b[D", "\x1bOA", "\x1bOC", "\x1bOD")
+    },
+}
 
 
 @app.command("label")
@@ -178,79 +217,151 @@ def label(
         str | None,
         typer.Option(help="Only show emails from this split: dev or test."),
     ] = None,
+    assist: Annotated[
+        bool,
+        typer.Option(help="Show the local model's guess; Enter accepts. Dev only."),
+    ] = False,
 ) -> None:
     """Hand-label emails for the inbox eval. Saves after every key; quit any time."""
+    from jobagent.eval.assist import Suggester
+
     if split not in (None, "dev", "test"):
         console.print("[red]--split must be dev or test.[/]")
         raise typer.Exit(code=2)
-    conn = _open_db(Settings.from_env())
+    if assist and split != "dev":
+        # Anchoring bias: seeing a suggestion pulls your label towards it. The test
+        # split must stay blind so the final score is honest.
+        console.print(
+            "[red]--assist only works with --split dev (test stays blind).[/]"
+        )
+        raise typer.Exit(code=2)
+
+    settings = Settings.from_env()
+    conn = _open_db(settings)
     labels = load_labels(labels_path)
-    counts = Counter(
-        r["label"] for r in labels.values() if split is None or r["split"] == split
-    )
+    in_scope = [r for r in labels.values() if split is None or r["split"] == split]
+    counts = Counter(r["label"] for r in in_scope)
     queue = build_queue(conn, set(labels))
     if split:
         queue = [mid for mid in queue if split_for(mid) == split]
     # Undo stack of email IDs, oldest first. Seeded from the file, so undo also
-    # reaches labels made in earlier sessions.
+    # reaches labels made in earlier sessions (only within this split).
     undo_stack = [
-        r["gmail_message_id"]
-        for r in sorted(labels.values(), key=lambda r: r["labelled_at"])
+        r["gmail_message_id"] for r in sorted(in_scope, key=lambda r: r["labelled_at"])
     ]
     if not queue and not undo_stack:
         console.print("Nothing to label.")
         return
 
+    suggester = Suggester(_make_predictor(settings)) if assist else None
+    accepted = suggested_total = 0
+
+    def prefetch(position: int) -> None:
+        if suggester and position < len(queue):
+            r = get_raw_email(conn, queue[position])
+            suggester.prefetch(
+                queue[position],
+                clean_for_reading(r["subject"]),
+                clean_for_reading(r["body_text"]),
+            )
+
     i = 0
     chars = PREVIEW_CHARS
     status = ""
-    with console.screen():  # a separate screen, like vim/less: no scrollback pile-up
-        while i < len(queue):
-            mid = queue[i]
-            _show_email(get_raw_email(conn, mid), len(queue) - i, counts, chars, status)
-            status = ""
+    try:
+        with console.screen():  # a separate screen, like vim/less: no scrollback
+            while i < len(queue):
+                mid = queue[i]
+                suggestion = None
+                if suggester:
+                    prefetch(i)  # usually already done: no-op
+                    prefetch(i + 1)  # the model works on the next one while you read
+                    if not status:
+                        status = "Model is thinking…" if i == 0 else ""
+                    suggestion = suggester.get(mid)
+                    if suggestion is None and suggester.last_error:
+                        status = f"Model unavailable ({suggester.last_error}). Label by hand."
+                _show_email(
+                    get_raw_email(conn, mid),
+                    len(queue) - i,
+                    counts,
+                    chars,
+                    status,
+                    suggestion,
+                )
+                status = ""
 
-            try:
-                key = typer.getchar().lower()
-            except (KeyboardInterrupt, EOFError):
-                key = "q"
-
-            if key in LABEL_KEYS:
-                category = LABEL_KEYS[key]
-                append_label(labels_path, mid, category)
-                counts[category] += 1
-                undo_stack.append(mid)
-                status = f"✓ Saved previous email as {category.value}"
-                i, chars = i + 1, PREVIEW_CHARS
-            elif key == "s":
-                status = "Skipped previous email (it will come back next session)"
-                i, chars = i + 1, PREVIEW_CHARS
-            elif key == "m":
-                chars *= 4
-            elif key == "u":
-                if not undo_stack:
-                    status = "Nothing to undo"
+                try:
+                    raw_key = typer.getchar()
+                except (KeyboardInterrupt, EOFError):
+                    raw_key = "q"
+                # Arrow keys arrive as escape sequences, e.g. Down = "\x1b[B".
+                # Check before lower(), which would mangle them.
+                key = ARROW_KEYS.get(raw_key, raw_key.lower())
+                if key == "arrow":
+                    status = "Arrow keys: ↓ shows more. Use the letter keys to label."
                     continue
-                undone = undo_stack.pop()
-                previous = load_labels(labels_path)[undone]["label"]
-                append_label(labels_path, undone, None)
-                counts[previous] -= 1
-                queue.insert(i, undone)  # show it again, right now
-                status = f"↶ Removed label '{previous}'. Choose a new one."
-                chars = PREVIEW_CHARS
-            elif key in ("q", ""):  # "" = end of input (e.g. piped/tests)
-                break
-            else:
-                status = f"Unknown key {key!r}. Use the keys listed above."
+
+                if key in ENTER and suggestion is not None:
+                    key = next(
+                        k for k, c in LABEL_KEYS.items() if c == suggestion.category
+                    )
+                    accepted += 1
+
+                if key in LABEL_KEYS:
+                    category = LABEL_KEYS[key]
+                    append_label(
+                        labels_path,
+                        mid,
+                        category,
+                        suggested=suggestion.category if suggestion else None,
+                    )
+                    if suggestion:
+                        suggested_total += 1
+                    counts[category] += 1
+                    undo_stack.append(mid)
+                    status = f"✓ Saved previous email as {category.value}"
+                    i, chars = i + 1, PREVIEW_CHARS
+                elif key == "s":
+                    status = "Skipped previous email (it will come back next session)"
+                    i, chars = i + 1, PREVIEW_CHARS
+                elif key == "m":
+                    chars *= 4
+                elif key == "u":
+                    if not undo_stack:
+                        status = "Nothing to undo"
+                        continue
+                    undone = undo_stack.pop()
+                    previous = load_labels(labels_path)[undone]["label"]
+                    append_label(labels_path, undone, None)
+                    counts[previous] -= 1
+                    queue.insert(i, undone)  # show it again, right now
+                    status = f"↶ Removed label '{previous}'. Choose a new one."
+                    chars = PREVIEW_CHARS
+                elif key in ("q", ""):  # "" = end of input (e.g. piped/tests)
+                    break
+                elif key in ENTER:
+                    status = "No suggestion to accept. Use the keys listed above."
+                else:
+                    status = f"Unknown key {key!r}. Use the keys listed above."
+    finally:
+        if suggester:
+            suggester.close()
 
     console.print(
         f"Saved to {labels_path}. Labelled {sum(counts.values())} in total: "
         + ", ".join(f"{c} {n}" for c, n in counts.most_common() if n)
     )
+    if suggested_total:
+        console.print(
+            f"Suggestions accepted with Enter: {accepted} of {suggested_total} "
+            f"({accepted / suggested_total:.0%})"
+        )
 
 
 # --- Evaluation ------------------------------------------------------------
 
+RUNS_DIR = Path("evals/runs")  # one JSON per eval run; git-ignored (personal counts)
 RARE_TARGETS = (Category.INTERVIEW_INVITE.value, Category.ASSESSMENT.value)
 RECALL_TARGET = 0.95
 
@@ -264,9 +375,22 @@ def eval_inbox(
         str, typer.Option(help="dev (default) or test. Use test once, at the end.")
     ] = "dev",
     labels_path: Annotated[Path, typer.Option("--labels")] = LABELS_PATH,
+    show_errors: Annotated[
+        bool,
+        typer.Option(
+            "--show-errors",
+            help="After scoring, step through the emails it got wrong (dev only).",
+        ),
+    ] = False,
 ) -> None:
     """Score a classifier on your labels. Prints numbers only, never email text."""
-    from jobagent.eval.inbox import CLASSIFIERS, run_eval
+    from jobagent.eval.inbox import CLASSIFIERS, disagreements, run_eval
+    from jobagent.inbox.classify import PROMPT_VERSION
+
+    if show_errors and split != "dev":
+        # Studying test mistakes and then fixing them = tuning on test.
+        console.print("[red]--show-errors only works on dev (test stays unseen).[/]")
+        raise typer.Exit(code=2)
     from jobagent.eval.metrics import confusion_matrix, macro_f1, per_class
 
     choices = [*CLASSIFIERS, "llm"]
@@ -286,7 +410,7 @@ def eval_inbox(
     if classifier == "llm":
         import ollama
 
-        from jobagent.inbox.classify import PROMPT_VERSION, LLMClassifier
+        from jobagent.inbox.classify import LLMClassifier
 
         llm = LLMClassifier(
             ollama.Client(host=settings.ollama_host), settings.inbox_model
@@ -383,6 +507,93 @@ def eval_inbox(
             f"Invalid model output (counted as 'other'): {llm.errors} · "
             f"evidence quote not found in email: {llm.unsupported}"
         )
+
+    from jobagent.eval.inbox import save_run
+
+    saved = save_run(
+        RUNS_DIR,
+        {
+            "classifier": classifier,
+            "model": settings.inbox_model if llm else None,
+            "prompt_version": PROMPT_VERSION if llm else None,
+            "split": split,
+            "n": len(run.y_true),
+            "macro_f1": macro_f1(report),
+            "rare_recall": {"caught": caught, "total": total, "value": rare_recall},
+            "per_class": report,
+            "confusion_matrix": matrix,
+            "avg_latency_ms": avg_ms,
+            "invalid_outputs": llm.errors if llm else None,
+            "evidence_not_found": llm.unsupported if llm else None,
+            "missing_from_db": run.missing,
+        },
+    )
+    console.print(f"[dim]Run saved to {saved}[/]")
+
+    if show_errors:
+        _review_errors(conn, disagreements(run), labels_path, classifier)
+
+
+def _review_errors(conn, errors, labels_path: Path, classifier: str) -> None:
+    """Step through disagreements locally. Your label can be corrected here too:
+    sometimes the model is right and the label was the mistake."""
+    if not errors:
+        console.print("No disagreements to review.")
+        return
+    console.print(f"[bold]{len(errors)} disagreements.[/] Press any key to start.")
+    typer.getchar()
+
+    help_line = (
+        "[dim]Enter/n next · p previous · m more · "
+        "a label key (o i a r t c x) corrects YOUR label · q quit[/]"
+    )
+    corrected = 0
+    i, chars, status = 0, PREVIEW_CHARS, ""
+    with console.screen():
+        while 0 <= i < len(errors):
+            mid, yours, predicted = errors[i]
+            row = get_raw_email(conn, mid)
+            body = clean_for_reading(row["body_text"]) or "(empty body)"
+            shown = body[:chars] + (
+                f"\n\n… {len(body) - chars} more (m)" if len(body) > chars else ""
+            )
+            console.clear()
+            console.print(
+                f"[dim]Disagreement {i + 1}/{len(errors)}[/]   "
+                f"You: [bold green]{yours}[/]   {classifier}: [bold red]{predicted}[/]"
+            )
+            console.print(
+                Panel(Text(shown), title=Text(row["subject"] or "(no subject)"))
+            )
+            console.print(help_line)
+            if status:
+                console.print(Text(status, style="bold yellow"))
+            status = ""
+
+            try:
+                raw = typer.getchar()
+            except (KeyboardInterrupt, EOFError):
+                raw = "q"
+            key = ARROW_KEYS.get(raw, raw.lower())
+            if key in ("q", ""):
+                break
+            if key in (*ENTER, "n"):
+                i, chars = i + 1, PREVIEW_CHARS
+            elif key == "p":
+                i, chars = max(i - 1, 0), PREVIEW_CHARS
+            elif key == "m":
+                chars *= 4
+            elif key in LABEL_KEYS:
+                new = LABEL_KEYS[key]
+                append_label(labels_path, mid, new)
+                errors[i] = (mid, new.value, predicted)
+                corrected += 1
+                status = f"Your label changed to {new.value}"
+            else:
+                status = f"Unknown key {key!r}"
+    console.print(
+        f"Reviewed {len(errors)} disagreements; corrected {corrected} of your labels."
+    )
 
 
 if __name__ == "__main__":

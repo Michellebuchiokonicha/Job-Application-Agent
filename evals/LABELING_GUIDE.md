@@ -31,6 +31,7 @@ Run `uv run jobagent label`. Labels are saved to `evals/inbox_labels.jsonl` (IDs
 | A calendar invite for anything else (community call, webinar) | `other` | |
 | Interview **reminder** or **reschedule** for an interview already booked | `interview_invite` | It's still about the interview; missing it is costly. |
 | Assessment **reminder** ("your test expires in 2 days") | `assessment` | Same reason: costly to miss. |
+| "Thanks for **completing** the assessment, we'll review your responses" (even with a feedback/insights link) | `confirmation` | The test is done; nothing to act on, nothing decided. |
 | Recruiter sends a job they think suits you (you haven't applied) | `recruiter_message` | A real person, about a job. |
 | A mass "jobs you might like" email, even from a recruiting agency | `other` | Automated, not about your application. |
 | Offer to "book a call" from a careers coach or paid service | `other` | Marketing, not a hiring process. |

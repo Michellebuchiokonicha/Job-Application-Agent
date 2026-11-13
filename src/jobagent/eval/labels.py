@@ -42,14 +42,25 @@ def load_labels(path: Path = LABELS_PATH) -> dict[str, dict]:
     return {mid: r for mid, r in labels.items() if r["label"] is not None}
 
 
-def append_label(path: Path, gmail_message_id: str, label: Category | None) -> None:
-    """Record a label (or None to undo one). Appends only; never rewrites the file."""
+def append_label(
+    path: Path,
+    gmail_message_id: str,
+    label: Category | None,
+    suggested: Category | None = None,
+) -> None:
+    """Record a label (or None to undo one). Appends only; never rewrites the file.
+
+    `suggested` = what the model proposed, if you labelled with assistance. Kept so
+    we can measure how often suggestions were accepted (and spot anchoring).
+    """
     record = {
         "gmail_message_id": gmail_message_id,
         "label": Category(label).value if label is not None else None,
         "split": split_for(gmail_message_id),
         "labelled_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
+    if suggested is not None:
+        record["suggested"] = Category(suggested).value
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")

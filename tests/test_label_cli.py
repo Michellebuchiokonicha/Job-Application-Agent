@@ -136,3 +136,15 @@ def test_split_option_shows_only_that_split(tmp_path, monkeypatch):
     saved = load_labels(labels)
     assert saved  # some test-split emails exist among 30
     assert all(split_for(mid) == "test" for mid in saved)
+
+
+def test_arrow_keys(env, monkeypatch):
+    # getchar returns a whole escape sequence per arrow key in a real terminal;
+    # the test runner reads one char at a time, so feed whole keys via a fake.
+    _, labels = env
+    keys = iter(["\x1b[A", "\x1b[B", "x", "q"])
+    monkeypatch.setattr("typer.getchar", lambda *a, **k: next(keys))
+    result = run(labels, "")
+    assert "Arrow keys" in result.output
+    assert "Unknown key" not in result.output
+    assert len(load_labels(labels)) == 1  # arrows saved nothing; x did

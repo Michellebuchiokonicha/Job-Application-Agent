@@ -7,7 +7,7 @@ checked against the email so the model can't justify itself with invented text.
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -62,7 +62,7 @@ class Prediction:
 class ChatClient(Protocol):
     """The slice of ollama.Client we use; lets tests pass a fake."""
 
-    def chat(self, **kwargs): ...
+    def chat(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 def _normalise(text: str) -> str:
