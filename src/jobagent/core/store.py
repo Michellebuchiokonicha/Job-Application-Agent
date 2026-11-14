@@ -386,17 +386,20 @@ def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
 
 
 def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
-    """Is this job already stored under a *different* ID? Agencies often post the same
-    job several times; same company + title + location (ignoring case) = same job."""
+    """Is this job already stored under a *different* ID?
+
+    Agencies repost the same ad: sometimes twice, sometimes once per postcode (one ad
+    appeared in 40+ towns). Same company + same title (ignoring case) = one job to
+    apply for, wherever it's listed.
+    """
     return (
         conn.execute(
             """
             SELECT 1 FROM jobs
             WHERE lower(company) = lower(?) AND lower(title) = lower(?)
-              AND lower(location) = lower(?)
               AND NOT (source = ? AND external_id = ?)
             """,
-            (job.company, job.title, job.location, job.source, job.external_id),
+            (job.company, job.title, job.source, job.external_id),
         ).fetchone()
         is not None
     )

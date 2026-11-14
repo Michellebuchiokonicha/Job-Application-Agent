@@ -67,7 +67,11 @@ class Region(IntEnum):
 
 _EXCLUDED = re.compile(
     r"\b(scotland|wales|northern ireland|edinburgh|glasgow|aberdeen|dundee|inverness|"
-    r"stirling|cardiff|swansea|wrexham|belfast|londonderry|derry|lisburn|dublin|ireland|cork|galway|limerick|waterford|kilkenny)\b"
+    r"stirling|cardiff|swansea|wrexham|belfast|londonderry|derry|lisburn|dublin|ireland|cork|galway|limerick|waterford|kilkenny|"
+    # more of Wales and Scotland
+    r"aberystwyth|bangor|bridgend|merthyr|pontypridd|carmarthen|haverfordwest|rhyl|"
+    r"caerphilly|llan\w*|falkirk|livingston|kilmarnock|ayr|paisley|dunfermline|"
+    r"kirkcaldy|motherwell)\b"
 )
 _LONDON = re.compile(
     r"\b(london|city of london|canary wharf|westminster|shoreditch|croydon|stratford|"
@@ -80,7 +84,9 @@ _SOUTH = re.compile(
     r"stevenage|exeter|swindon|cheltenham|gloucester|maidstone|canterbury|"
     r"tunbridge wells|surrey|berkshire|hampshire|kent|sussex|essex|oxfordshire|"
     r"buckinghamshire|hertfordshire|bedfordshire|wiltshire|south east|south west|"
-    r"home counties)\b"
+    r"home counties|welwyn|hatfield|harlow|abingdon|didcot|high wycombe|aylesbury|"
+    r"bedford|newbury|wokingham|staines|epsom|redhill|horsham|sevenoaks|dartford|"
+    r"gravesend|tonbridge|ashford|harwell|bicester|banbury|letchworth|hitchin)\b"
 )
 _REMOTE = re.compile(r"\b(remote|work from home|home[- ]based|fully remote)\b")
 

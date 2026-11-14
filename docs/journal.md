@@ -227,3 +227,11 @@ also means software test automation and factory (PLC) automation, which are diff
 Those are dropped unless the title also has an AI/ML word ("AI Test Automation Engineer" stays).
 A second run after the location fixes kept 78 of the 84: the 6 gone were the Irish job, the
 Data Scientist role (now back), and 2 repeat postings of jobs already listed.
+
+**Third run, wider roles:** 1,241 results → 931 distinct → **102 kept** (24 new). The data
+scientist and automation searches added real roles, and they exposed one big source of
+noise: a single agency had posted the same two "trainee/junior AI" ads in **40+ different
+postcodes**, filling nearly half the list. The duplicate rule now ignores location: same
+company + same title = one job to apply for, wherever it's listed. Also fixed: Aberystwyth
+(Wales) was counted as England, and Home Counties towns like Welwyn Garden City and Abingdon
+now rank with the South.

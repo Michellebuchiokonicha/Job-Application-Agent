@@ -163,6 +163,10 @@ def test_other_roles_do_not_match(title):
         ("EH1 1YZ", Region.EXCLUDED),  # Edinburgh
         ("CV11 5AA", Region.ENGLAND),  # Coventry area
         ("Bath", Region.SOUTH),  # a town name, not a postcode
+        ("Aberystwyth", Region.EXCLUDED),  # Wales
+        ("Llandudno", Region.EXCLUDED),  # any Welsh "Llan..." town
+        ("Welwyn Garden City", Region.SOUTH),
+        ("Abingdon", Region.SOUTH),
     ],
 )
 def test_region(location, region):
@@ -211,7 +215,12 @@ def test_fetch_twice_is_idempotent(conn):
 
 def test_list_jobs_orders_by_region_then_newest(conn):
     jobs = [
-        job(external_id="1", location="Manchester", posted=date(2026, 11, 13)),
+        job(
+            external_id="1",
+            title="MLOps Engineer",
+            location="Manchester",
+            posted=date(2026, 11, 13),
+        ),
         job(external_id="2", location="London", posted=date(2026, 11, 10)),
         job(
             external_id="3",
@@ -219,7 +228,12 @@ def test_list_jobs_orders_by_region_then_newest(conn):
             location="London",
             posted=date(2026, 11, 12),
         ),
-        job(external_id="4", location="Reading", posted=date(2026, 11, 13)),
+        job(
+            external_id="4",
+            title="Applied Scientist",
+            location="Reading",
+            posted=date(2026, 11, 13),
+        ),
     ]
     fetch_jobs(conn, lambda t, n: jobs, TODAY, terms=["a"])
     assert [r["external_id"] for r in list_jobs(conn)] == ["3", "2", "4", "1"]
@@ -288,3 +302,13 @@ def test_clear(cli_env, monkeypatch):
     result = CliRunner().invoke(cli.app, ["jobs", "clear", "--yes"])
     assert "Deleted 1 jobs" in result.output
     assert "No jobs yet" in CliRunner().invoke(cli.app, ["jobs", "list"]).output
+
+
+def test_same_ad_in_many_postcodes_is_one_job(conn):
+    jobs = [
+        job(external_id="1", location="E1 6RP"),
+        job(external_id="2", location="RG1 1QH"),
+        job(external_id="3", location="LS1 3AD"),
+    ]
+    stats = fetch_jobs(conn, lambda t, n: jobs, TODAY, terms=["a"])
+    assert (stats.kept, stats.dropped["same job posted again"]) == (1, 2)
