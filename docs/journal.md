@@ -235,3 +235,7 @@ postcodes**, filling nearly half the list. The duplicate rule now ignores locati
 company + same title = one job to apply for, wherever it's listed. Also fixed: Aberystwyth
 (Wales) was counted as England, and Home Counties towns like Welwyn Garden City and Abingdon
 now rank with the South.
+
+**After collapsing repeat ads:** 1,241 results → 931 distinct → **47 kept**. 56 were the same
+ad posted again (mostly one agency's ads repeated across dozens of postcodes). The list went
+from 102 rows to 47 without losing a single distinct job.
