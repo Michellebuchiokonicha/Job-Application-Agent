@@ -176,3 +176,5 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Stale derived data**: A value computed from data that later changed, so it now describes a state that no longer exists, like a cache that's never invalidated. Here: the model's summary ("meets all essentials") was written before the verifier removed claims. Fix: derive it after the last step that changes the data, or compute it from the final data in code.
 
 **Atomic requirement**: One skill or tool per requirement ("Terraform"), not a bundle ("CI/CD, observability and infrastructure as code"). A single yes/no about a bundle is wrong whenever the candidate has some but not all of it.
+
+**Weighting unit**: What each point of a score is attached to. Here requirements are *judged* one skill at a time (accurate yes/no) but *weighted* per line of the ad (so a bullet listing four systems doesn't count four times). Rubrics in exams and hiring work the same way: criteria are scored separately, then weighted by section.

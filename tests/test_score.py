@@ -1,6 +1,7 @@
 """Fit scoring: CV choice, the scorer's guards, and the score/show commands. Made-up data."""
 
 import json
+from dataclasses import asdict
 from datetime import date
 
 import pytest
@@ -127,7 +128,7 @@ def test_met_claim_without_a_real_cv_quote_counts_as_missing():
     assert fit.score == 50  # 1 of 2, no nice-to-haves: all 100 points on the one group
 
 
-def test_invented_ad_quote_is_counted():
+def test_invented_ad_quote_is_counted_and_dropped():
     reqs = [req("Rust", "10 years of Rust", False)]
     assert score_with(assessment(requirements=reqs)).unverified_job_quotes == 1
 
@@ -289,6 +290,39 @@ def test_summary_agrees_with_the_final_score():
     )
 
 
+def test_verifier_sees_the_ads_wording():
+    chat = FakeChat(assessment())
+    FitScorer(chat, "m").score("t", "c", AD, CV)
+    assert (
+        "Ad says: experience with RAG pipelines"
+        in chat.calls[1]["messages"][1]["content"]
+    )
+
+
+def test_show_says_why_a_claim_was_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
+    from jobagent.core.store import connect, init_db, save_score, upsert_job
+
+    conn = connect(tmp_path / "t.db")
+    init_db(conn)
+    upsert_job(conn, Job("reed", "1", "ML Engineer", "Acme", "London", "u", "d"), 0)
+    fit = score_with(assessment(), reject={2})
+    save_score(
+        conn,
+        1,
+        score=fit.score,
+        verdict=fit.verdict,
+        cv="ai_engineer",
+        assessment_json=json.dumps(asdict(fit)),
+        unverified=0,
+        model="m",
+        prompt_version="v6",
+    )
+    conn.commit()
+    out = CliRunner().invoke(cli.app, ["jobs", "show", "1"]).output
+    assert "doesn't prove it" in out and "Architected RAG pipelines" in out
+
+
 def test_verifier_failure_is_reported_not_hidden():
     class BrokenVerifier(FakeChat):
         def chat(self, **kwargs):
@@ -306,3 +340,44 @@ def test_no_verifier_call_when_nothing_is_claimed():
     chat = FakeChat(assessment(requirements=reqs))
     FitScorer(chat, "m").score("t", "c", AD, CV)
     assert len(chat.calls) == 1
+
+
+def test_requirements_not_in_the_ad_are_dropped():
+    # the model once listed CV skills as "requirements", all met
+    reqs = [
+        req("Python", "strong Python", True, "Python, FastAPI"),
+        req("MongoDB", "MongoDB Vector Search", True, "MongoDB Vector Search"),
+        req("Python", "strong Python", True, "Python, FastAPI"),  # listed twice
+    ]
+    fit = score_with(assessment(requirements=reqs))
+    assert [r.requirement for r in fit.requirements] == ["Python"]
+    assert fit.unverified_job_quotes == 1
+
+
+def test_each_ad_line_weighs_the_same():
+    ad = "Build RAG systems\nIntegrate with ERP, CRM, finance and document platforms"
+    reqs = [
+        req("RAG", "Build RAG systems", True, "Architected RAG pipelines"),
+        req("ERP", "ERP", False),
+        req("CRM", "CRM", False),
+        req("Finance", "finance", False),
+        req("Documents", "document platforms", False),
+    ]
+    fit = FitScorer(FakeChat(assessment(requirements=reqs)), "m").score(
+        "t", "c", ad, CV
+    )
+    # per skill this would be 1 of 5 = 20; per ad line it's 1 of 2 lines = 50
+    assert fit.score == 50
+
+
+def test_partly_met_line_gets_partial_credit():
+    ad = "Experience with RAG pipelines and strong Python"
+    reqs = [
+        req("RAG", "RAG pipelines", True, "Architected RAG pipelines"),
+        req("Python", "strong Python", True, "Python, FastAPI"),
+        req("Kotlin", "RAG pipelines and", False),  # same line, not met
+    ]
+    fit = FitScorer(FakeChat(assessment(requirements=reqs)), "m").score(
+        "t", "c", ad, CV
+    )
+    assert fit.score == 67  # one line, 2 of 3 met

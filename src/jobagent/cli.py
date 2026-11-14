@@ -868,12 +868,14 @@ def jobs_show(
     console.print(f"[yellow bold]Missing ({len(missing)})[/]")
     for q in missing:
         tag = " (essential)" if q["essential"] else " (nice to have)"
-        note = (
-            "  [claimed, but no matching line in your CV]"
-            if q["claimed_but_unverified"]
-            else ""
-        )
+        note = ""
+        if q["claimed_but_unverified"]:
+            note = "  [claimed, but no matching line in your CV]"
+        elif q.get("not_proven"):  # .get: scores saved before v4 lack the field
+            note = "  [checker: this CV line doesn't prove it]"
         console.print(Text(f"  · {q['requirement']}{tag}{note}"))
+        if q.get("not_proven"):
+            console.print(Text(f'      your CV: "{q["cv_quote"]}"', style="dim"))
     if not reqs:
         console.print("[dim]  The model listed no requirements.[/]")
 

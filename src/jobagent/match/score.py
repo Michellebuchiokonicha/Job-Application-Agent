@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from jobagent.inbox.classify import ChatClient
 
-PROMPT_VERSION = "v5"  # v5: one skill per requirement; summary written by code
+PROMPT_VERSION = "v6"  # v6: verifier sees the ad; fair on general requirements
 MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
@@ -38,8 +38,8 @@ requirements. job_quote: the shortest exact words from the ad that name that one
 2. For each requirement decide met = true only if the CV shows THE SAME skill or \
 experience. A related but different skill does not count (e.g. building an edtech app is \
 not "integration with ERP/CRM systems"). If unsure, met = false.
-   When met = true, cv_quote must be copied exactly from the CV and directly show it. \
-When met = false, cv_quote is "".
+   When met = true, cv_quote must be copied exactly from the CANDIDATE CV section (never \
+from the job ad) and directly show it. When met = false, cv_quote is "".
 3. dealbreakers: only if the ad states them: security clearance required, a PhD stated as \
 essential, far more years of experience than CANDIDATE FACTS, a fee to join.
 4. concerns: practical issues worth checking, not skills: e.g. contract (not permanent), \
@@ -60,10 +60,14 @@ class Requirement(BaseModel):
 # Second pass: one narrow question per "met" claim. The first pass checks quotes exist; this
 # checks they prove the point. ("Built FastAPI services" is real, but not ERP/CRM integration.)
 VERIFY_PROMPT = """\
-You check claims on a job application. For each numbered pair, answer whether the CV line, \
-on its own, directly shows the candidate has THAT specific requirement. Be strict:
-- Specific named things (e.g. ERP, CRM, infrastructure as code, Power Automate, Kubernetes, \
-a named cloud or tool) must actually appear in, or be clearly done in, the CV line.
+You check claims on a job application. For each numbered item, answer whether the CV line, \
+on its own, directly shows the candidate has that requirement (the ad's wording is given \
+for context). Be strict about specific things, fair about general ones:
+- If the requirement names a specific tool, system, domain or practice (e.g. ERP, CRM, \
+infrastructure as code, Power Automate, Kubernetes, a named cloud), the CV line must show \
+that same thing.
+- If the requirement is general (e.g. "AI applications", "work with stakeholders"), one \
+clear, concrete example in the CV line is enough.
 - General engineering work does not prove a specific tool, domain or practice.
 - Giving talks or teaching does not prove hands-on use of something.
 - If the CV line is about something else, the answer is false.
@@ -97,6 +101,8 @@ class CheckedRequirement:
     not_proven: bool = (
         False  # real CV quote, but the verifier says it doesn't prove this
     )
+    job_quote: str = ""  # the ad's wording, so the verifier knows what was asked
+    ad_line: int | None = None  # which line of the ad it came from (for weighting)
 
 
 @dataclass
@@ -166,6 +172,14 @@ _OPTIONAL = re.compile(
     r"\b(nice to have|nice-to-have|bonus|desirable|ideally|preferred|a plus|advantageous|"
     r"beneficial|not essential|would be great)\b"
 )
+
+
+def ad_line(job_quote: str, ad: str) -> int | None:
+    """Which line of the ad a quote is on; None if it isn't found word for word."""
+    q = _normalise(job_quote)
+    flat = re.sub(r"[ \t]+", " ", ad.lower())
+    at = flat.find(q) if q else -1
+    return None if at == -1 else flat.count("\n", 0, at)
 
 
 def is_optional(job_quote: str, ad: str) -> bool | None:
@@ -251,21 +265,36 @@ def build_prompt(
 # --- The score, computed in code ----------------------------------------------------
 
 
+def _line_scores(reqs: list[CheckedRequirement]) -> list[float]:
+    """Each line of the ad counts once: the fraction of its requirements that are met.
+
+    Requirements are judged one skill at a time, but weighted per ad line, so "ERP, CRM,
+    finance and document platforms" (one bullet, four skills) weighs the same as "RAG".
+    A requirement whose line can't be found (a light paraphrase) counts as its own line.
+    """
+    lines: dict[object, list[bool]] = {}
+    for i, r in enumerate(reqs):
+        key = r.ad_line if r.ad_line is not None else ("own", i)
+        lines.setdefault(key, []).append(r.met)
+    return [sum(met) / len(met) for met in lines.values()]
+
+
 def compute_score(reqs: list[CheckedRequirement], dealbreakers: list[str]) -> int:
-    """80 points for essential requirements met, 20 for nice-to-haves.
+    """80 points for essential lines of the ad, 20 for nice-to-have lines.
 
     If the ad marks nothing as optional (or nothing as essential), that one group carries
     all 100 points. Any dealbreaker caps the score at 30.
     """
     if not reqs:
         return 0
-    essential = [r for r in reqs if r.essential]
-    optional = [r for r in reqs if not r.essential]
+    essential = _line_scores([r for r in reqs if r.essential])
+    optional = _line_scores([r for r in reqs if not r.essential])
     if not essential or not optional:
-        score = 100 * sum(r.met for r in reqs) / len(reqs)
+        both = essential + optional
+        score = 100 * sum(both) / len(both)
     else:
-        score = 80 * sum(r.met for r in essential) / len(essential)
-        score += 20 * sum(r.met for r in optional) / len(optional)
+        score = 80 * sum(essential) / len(essential)
+        score += 20 * sum(optional) / len(optional)
     score = round(score)
     return min(score, 30) if dealbreakers else score
 
@@ -298,11 +327,19 @@ def verdict_for(score: int) -> str:
 def check(assessment: FitAssessment, description: str, cv: str) -> Fit:
     """Verify every quote, then compute the score from what survived."""
     checked = []
+    seen = set()
     unverified_job = unverified_cv = 0
     for r in assessment.requirements:
-        optional = is_optional(r.job_quote, description)
-        if optional is None:
+        # A requirement must come from the ad. In testing, the model once listed ~70
+        # "requirements" copied from the CV (every framework, "Google Developer Expert"),
+        # all "met", inflating the score. Same light-paraphrase tolerance as CV quotes.
+        if not cv_supports(r.job_quote, description):
             unverified_job += 1
+            continue
+        if (key := r.requirement.strip().lower()) in seen:
+            continue  # listed twice: count once
+        seen.add(key)
+        optional = is_optional(r.job_quote, description)  # None: a light paraphrase
         essential = r.essential if optional is None else not optional
         cv_ok = cv_supports(r.cv_quote, cv)
         if r.met and not cv_ok:
@@ -314,6 +351,8 @@ def check(assessment: FitAssessment, description: str, cv: str) -> Fit:
                 met=r.met and cv_ok,
                 cv_quote=r.cv_quote if cv_ok else "",
                 claimed_but_unverified=r.met and not cv_ok,
+                job_quote=r.job_quote,
+                ad_line=ad_line(r.job_quote, description),
             )
         )
     score = compute_score(checked, assessment.dealbreakers)
@@ -365,7 +404,8 @@ class FitScorer:
         if not claims:
             return
         pairs = "\n\n".join(
-            f"{i}. Requirement: {r.requirement}\n   CV line: {r.cv_quote}"
+            f"{i}. Requirement: {r.requirement}\n   Ad says: {r.job_quote}\n"
+            f"   CV line: {r.cv_quote}"
             for i, r in enumerate(claims, start=1)
         )
         for _ in range(1 + self.retries):

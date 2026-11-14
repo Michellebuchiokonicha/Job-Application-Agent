@@ -337,3 +337,49 @@ reviewer.
 
 Lesson: **anything derived must be derived after the last step that changes the data.**
 Otherwise, it reports a state that no longer exists, like a cache that's never invalidated.
+
+**v5 real run:** the AI Engineer job went *down*, 52 → 32, though the CV had improved. A
+debug run of the raw model output showed why:
+
+- The model copied the **ad's own text** as "CV quotes" (data governance, AI tools,
+  greenfield). The quote check caught every one: the guard worked.
+- The verifier rejected "AI applications" against a line that plainly proves it. The v4
+  rule "named things must appear" was applied even to *general* requirements.
+
+### Fit scoring v6: a fairer verifier, and requirements must come from the ad
+
+- The verifier now sees the ad's wording too, and its rule scales with specificity:
+  a named tool or system (ERP, Terraform) must appear in the CV line; a general
+  requirement ("AI applications") passes on one clear, concrete example.
+- After that prompt change, one run listed **~70 "requirements" copied from the CV**
+  (every framework, "Google Developer Expert"), all "met": score 66. The code had been
+  *counting* requirement quotes not found in the ad, but still scoring them. Now they're
+  **dropped**: a requirement must be traceable to the ad. Duplicates count once.
+- `jobs show` now says when the verifier rejected a claim, and shows the CV line.
+
+Result on the same job: 15 requirements kept, 40 dropped, score 29 ("poor fit"). It misses
+ERP integration, governance and the agent lifecycle, and it's a 6-month contract. That's
+honest.
+
+Two lessons:
+- **A small prompt change can change behaviour a lot.** One sentence turned a 10-item list
+  into 70 items. Guards in code (the quote checks) are what make that survivable; prompt
+  wording alone isn't.
+- **Stop tuning on one example.** Three rounds on the same job risks fitting the scorer to
+  that ad. The next check is the spread across all jobs, plus a few hand-labelled ones.
+  That's an eval set, as with the inbox classifier.
+
+**v6 real run:** 48 made-up requirements dropped across 3 jobs; "AI applications" now passes.
+One new problem: **splitting changed the weighting.** Job 16 had 18 essentials, and 8 of
+them came from two ad bullets ("ERP, CRM, finance and document platforms"; "governance,
+security, auditability and human oversight"). One bullet weighed four times as much as
+"build RAG capabilities".
+
+**Fix: judge per skill, weight per ad line.** Each line of the ad counts once, worth the
+fraction of its skills met ("CI/CD, observability, IaC, code review": 2 of 4 → half a line).
+Same data, different counting; no model call needed. Job 16: 27 → 40 ("stretch"), which
+matches how a human would read it: strong on the AI core, missing the enterprise side.
+
+Lesson: **the unit you judge and the unit you weight don't have to be the same.** Fine
+units make judgements accurate; the weighting should follow the structure the author gave
+(the ad's bullets).
