@@ -117,6 +117,12 @@ def test_bad_key_fails_loudly():
         "Forward-Deployed Software Engineer",
         "AI Solutions Architect",
         "GenAI Developer",
+        "Data Scientist",
+        "Lead AI Data Scientist",
+        "Automation Engineer",
+        "AI Automation Engineer",
+        "Intelligent Automation Developer",
+        "AI Test Automation Engineer",  # off-topic word, but AI rescues it
     ],
 )
 def test_target_roles_match(title):
@@ -126,12 +132,12 @@ def test_target_roles_match(title):
 @pytest.mark.parametrize(
     "title",
     [
-        "Data Scientist",
         "Solutions Architect",
         "Mail Engineer",
         "AI Trainer",
         "Sales Executive",
-        "Lead AI Data Scientist",  # data scientist ruled out, even with "AI"
+        "Test Automation Engineer",  # software testing, a different career
+        "PLC Automation Engineer",  # factory automation
     ],
 )
 def test_other_roles_do_not_match(title):
@@ -165,7 +171,9 @@ def test_region(location, region):
 
 def test_check_reasons():
     assert check(job(), TODAY).keep
-    assert check(job(title="Data Scientist"), TODAY).reason == "title not a target role"
+    assert (
+        check(job(title="Sales Executive"), TODAY).reason == "title not a target role"
+    )
     assert check(job(location="Glasgow"), TODAY).reason == "outside England"
     old = job(posted=date(2026, 10, 1))
     assert check(old, TODAY, max_age_days=14).reason == "older than 14 days"
@@ -185,7 +193,7 @@ def conn():
 def test_fetch_dedupes_filters_and_counts(conn):
     results = {
         "a": [job(external_id="1"), job(external_id="2", location="Glasgow")],
-        "b": [job(external_id="1"), job(external_id="3", title="Data Scientist")],
+        "b": [job(external_id="1"), job(external_id="3", title="Sales Executive")],
     }
     stats = fetch_jobs(conn, lambda term, n: results[term], TODAY, terms=["a", "b"])
     assert (stats.seen, stats.unique, stats.kept, stats.new) == (4, 3, 1, 1)

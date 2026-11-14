@@ -19,6 +19,8 @@ SEARCH_TERMS = (
     "applied scientist",
     "forward deployed engineer",
     "AI solutions architect",
+    "data scientist",
+    "automation engineer",
 )
 
 # A title must match one of these. Lower-case; \b = word boundary.
@@ -31,16 +33,25 @@ _ROLE_PATTERNS = [
     re.compile(r"\bmlops\b"),
     re.compile(r"\bapplied (ai |ml )?scientist\b"),
     re.compile(r"\bforward[- ]deployed\b"),
+    re.compile(r"\bdata scientist\b"),
+    re.compile(r"\bautomation (engineer|developer|specialist)\b"),
 ]
 
-
-# Roles you've ruled out, even when an AI/ML word is in the title.
-_NOT_ROLE = re.compile(r"\bdata scientist\b")
+# "Automation engineer" also means software *testing* and *factory* automation, which
+# are different careers. Drop those unless the title also has an AI/ML word.
+_OFF_TOPIC_AUTOMATION = re.compile(
+    r"\b(test|testing|qa|quality|plc|scada|controls?|electrical|mechanical|industrial|"
+    r"building|manufacturing|process control|instrumentation)\b"
+)
+_AI_WORD = re.compile(r"\b(ai|ml|machine learning|llm|gen ?ai|intelligent|agentic)\b")
 
 
 def matches_role(title: str) -> bool:
     t = title.lower()
-    return not _NOT_ROLE.search(t) and any(p.search(t) for p in _ROLE_PATTERNS)
+    if not any(p.search(t) for p in _ROLE_PATTERNS):
+        return False
+    off_topic = "automation" in t and _OFF_TOPIC_AUTOMATION.search(t)
+    return not (off_topic and not _AI_WORD.search(t))
 
 
 class Region(IntEnum):

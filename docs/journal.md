@@ -220,3 +220,10 @@ Looking at the 84 by eye found four kinds of mistakes, each now fixed with a tes
   now counts as one job.
 
 Lesson: the first run on real data is a test you can't write in advance. Read the output.
+
+**Scope widened (2026-11-14):** Data Scientist (including AI Data Scientist) and Automation
+Engineer roles are back in, with two new search terms. "Automation engineer" is ambiguous: it
+also means software test automation and factory (PLC) automation, which are different careers.
+Those are dropped unless the title also has an AI/ML word ("AI Test Automation Engineer" stays).
+A second run after the location fixes kept 78 of the 84: the 6 gone were the Irish job, the
+Data Scientist role (now back), and 2 repeat postings of jobs already listed.

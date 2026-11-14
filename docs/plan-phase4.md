@@ -6,7 +6,9 @@ fits and what's missing. I accept or reject each one; accepted jobs go to the ap
 ## What I'm looking for (config, `profile.yaml`, git-ignored)
 
 - **Roles:** ML Engineer, AI Engineer, MLOps Engineer, Applied Scientist, Forward Deployed
-  Engineer, AI Forward Deployed Engineer, AI Solutions Architect
+  Engineer, AI Forward Deployed Engineer, AI Solutions Architect, Data Scientist
+  (including AI Data Scientist), Automation Engineer (AI / intelligent automation; not
+  software-testing or factory automation)
 - **Location:** England only. Ranked: London first, then the South of England, then the rest of
   England. UK-remote is fine. Scotland, Wales, Northern Ireland and abroad are excluded.
 - **Salary:** no minimum
