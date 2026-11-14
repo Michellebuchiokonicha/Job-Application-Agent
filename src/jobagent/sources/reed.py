@@ -4,10 +4,12 @@ Auth is HTTP Basic: the API key is the username, the password is empty.
 Search returns at most 100 results per request; we page with resultsToSkip.
 """
 
+import re
 from collections.abc import Iterator
 from datetime import date, datetime
 
 import httpx
+from bs4 import BeautifulSoup
 
 from jobagent.sources.base import USER_AGENT, Job
 
@@ -74,5 +76,12 @@ class ReedClient:
             skip += take
 
     def full_description(self, job_id: str) -> str:
-        """Search only returns a snippet; the details endpoint has the full ad."""
-        return self._get(f"/jobs/{job_id}").get("jobDescription") or ""
+        """Search only returns a snippet; the details endpoint has the full ad (HTML)."""
+        html = self._get(f"/jobs/{job_id}").get("jobDescription") or ""
+        return html_to_text(html)
+
+
+def html_to_text(html: str) -> str:
+    """Job ads arrive as HTML. Keep line breaks between blocks so lists stay readable."""
+    text = BeautifulSoup(html, "html.parser").get_text("\n")
+    return re.sub(r"\n\s*\n+", "\n", text).strip()

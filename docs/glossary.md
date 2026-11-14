@@ -160,3 +160,9 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Test double / mock transport**: A stand-in for a real dependency during tests. Here: `httpx.MockTransport` answers like the Reed API, so tests need no key and no internet.
 
 **Enum alias**: In Python, two `Enum` members with the same value are the same member; the second name is just an alias. Caught here when "Remote" and "South" shared a rank.
+
+**Fit score**: The matcher's 0–100 judgement of how well a job suits the CV, with the requirements met (each quoting the ad), the ones missing, and any dealbreakers. Stored with the model name and prompt version, like every eval result.
+
+**Context window (`num_ctx`)**: How much text a model can read at once, in tokens. Ollama's default can be small, and longer input is cut off silently, so the scorer sets it explicitly.
+
+**Compute facts in code, not in the model**: Anything code can work out exactly (dates, counts, years of experience) is computed and handed to the model as a fact. Small models miscount; code doesn't.

@@ -665,11 +665,12 @@ def jobs_list(
     if not rows:
         console.print("No jobs yet. Run: uv run jobagent jobs fetch")
         return
-    table = Table("ID", "Title", "Company", "Where", "Posted", "Salary")
+    table = Table("ID", "Fit", "Title", "Company", "Where", "Posted", "Salary")
     for r in rows:
         posted = r["posted_at"]
         table.add_row(
             str(r["id"]),
+            _fit_cell(r["score"]),
             Text(r["title"]),  # Text(): job ads are untrusted, never parsed as markup
             Text(r["company"]),
             Text(f"{r['location']} ({Region(r['region']).name.title()})"),
@@ -691,6 +692,156 @@ def jobs_clear(
         raise typer.Exit(1)
     conn = _open_db(Settings.from_env())
     console.print(f"Deleted {clear_jobs(conn)} jobs.")
+
+
+def _fit_cell(score: int | None) -> Text:
+    if score is None:
+        return Text("-", style="dim")
+    colour = "green" if score >= 70 else "yellow" if score >= 50 else "red"
+    return Text(str(score), style=colour)
+
+
+def _make_scorer(settings: Settings):
+    """The local model's fit scorer. A separate function so tests can swap it."""
+    import ollama
+
+    from jobagent.match.score import FitScorer
+
+    return FitScorer(ollama.Client(host=settings.ollama_host), settings.inbox_model)
+
+
+@jobs_app.command("score")
+def jobs_score(
+    limit: Annotated[
+        int | None, typer.Option(help="Score at most this many (try 3 first).")
+    ] = None,
+    rescore: Annotated[
+        bool, typer.Option(help="Score again jobs that already have a score.")
+    ] = False,
+) -> None:
+    """Compare each job with your CV using the local model, and store a fit score."""
+
+    import httpx
+
+    from jobagent.core.store import jobs_to_score, save_full_description, save_score
+    from jobagent.match.cv import cv_for, load_cv
+    from jobagent.match.score import PROMPT_VERSION
+
+    settings = Settings.from_env()
+    conn = _open_db(settings)
+    rows = jobs_to_score(conn, rescore=rescore, limit=limit)
+    if not rows:
+        console.print("Nothing to score. Fetch jobs first, or use --rescore.")
+        return
+    reed = _make_reed(settings)
+    scorer = _make_scorer(settings)
+    console.print(
+        f"Model {settings.inbox_model} · prompt {PROMPT_VERSION} · running locally"
+    )
+
+    verdicts: Counter = Counter()
+    failed = snippet_only = unverified = 0
+    with Progress(console=console) as progress:
+        task = progress.add_task("Scoring", total=len(rows))
+        for row in rows:
+            description = row["full_description"]
+            if description is None:
+                try:
+                    description = reed.full_description(row["external_id"])
+                    save_full_description(conn, row["id"], description)
+                except httpx.HTTPError:
+                    description = row["description"]  # the snippet: better than nothing
+                    snippet_only += 1
+            cv_key = cv_for(row["title"])
+            try:
+                fit = scorer.score(
+                    row["title"], row["company"], description, load_cv(cv_key)
+                )
+            except ConnectionError:
+                console.print(
+                    f"[red]Can't reach Ollama at {settings.ollama_host}.[/] "
+                    "Start it with `ollama serve`."
+                )
+                raise typer.Exit(1) from None
+            if fit is None:
+                failed += 1  # counted and reported, never a made-up score
+            else:
+                a = fit.assessment
+                save_score(
+                    conn,
+                    row["id"],
+                    score=a.score,
+                    verdict=a.verdict,
+                    cv=cv_key,
+                    assessment_json=a.model_dump_json(),
+                    unverified=fit.unverified_quotes,
+                    model=settings.inbox_model,
+                    prompt_version=PROMPT_VERSION,
+                )
+                verdicts[a.verdict] += 1
+                unverified += fit.unverified_quotes
+            progress.advance(task)
+
+    scored = sum(verdicts.values())
+    console.print(f"Scored {scored} of {len(rows)} jobs.")
+    for verdict in ("strong", "worth applying", "stretch", "poor fit"):
+        if verdicts[verdict]:
+            console.print(f"  {verdict}: {verdicts[verdict]}")
+    if failed:
+        console.print(f"[yellow]  Model gave no valid answer for {failed}.[/]")
+    if snippet_only:
+        console.print(
+            f"[yellow]  Scored on the snippet only (full ad unavailable): {snippet_only}[/]"
+        )
+    console.print(f"[dim]  Quotes not found in the ad: {unverified}[/]")
+    console.print(
+        "[dim]Best first: uv run jobagent jobs list · details: jobs show ID[/]"
+    )
+
+
+@jobs_app.command("show")
+def jobs_show(
+    job_id: Annotated[int, typer.Argument(help="Job ID from jobs list.")],
+) -> None:
+    """Everything about one job: the fit assessment and a link to apply."""
+    import json
+
+    from jobagent.core.store import get_job
+
+    conn = _open_db(Settings.from_env())
+    try:
+        r = get_job(conn, job_id)
+    except KeyError:
+        console.print(f"No job with ID {job_id}.")
+        raise typer.Exit(1) from None
+
+    console.print(
+        Text(f"{r['title']} · {r['company']} · {r['location']}", style="bold")
+    )
+    console.print(Text(r["url"], style="cyan"))
+    if r["score"] is None:
+        console.print("Not scored yet. Run: uv run jobagent jobs score")
+        return
+    a = json.loads(r["assessment_json"])
+    console.print(
+        Text.assemble(
+            "Fit ", _fit_cell(r["score"]), f" · {r['verdict']} · CV: {r['cv']}"
+        )
+    )
+    console.print(Text(a["summary"]))
+    if a["dealbreakers"]:
+        console.print("[red bold]Dealbreakers[/]")
+        for d in a["dealbreakers"]:
+            console.print(Text(f"  ✗ {d}"))
+    console.print("[green bold]You meet[/]")
+    for m in a["met"]:
+        console.print(Text(f"  ✓ {m['requirement']}: {m['cv_evidence']}"))
+    console.print("[yellow bold]Missing[/]")
+    for m in a["missing"]:
+        tag = " (essential)" if m["essential"] else ""
+        console.print(Text(f"  · {m['requirement']}{tag}"))
+    if r["unverified"]:
+        console.print(f"[dim]{r['unverified']} quote(s) not found in the ad.[/]")
 
 
 def _short_salary(low: float | None, high: float | None) -> str:

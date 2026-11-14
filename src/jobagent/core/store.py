@@ -122,6 +122,26 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS ix_jobs_rank ON jobs (region, posted_at);
+
+-- The full ad, fetched once per job (search results only carry a snippet).
+CREATE TABLE IF NOT EXISTS job_details (
+    job_id            INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    full_description  TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL
+);
+
+-- The local model's fit assessment. One row per job; rescoring replaces it.
+CREATE TABLE IF NOT EXISTS job_scores (
+    job_id           INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    score            INTEGER NOT NULL,
+    verdict          TEXT NOT NULL,
+    cv               TEXT NOT NULL,      -- which CV it was compared with
+    assessment_json  TEXT NOT NULL,      -- met / missing / dealbreakers, in full
+    unverified       INTEGER NOT NULL,   -- quotes not found in the ad
+    model            TEXT NOT NULL,
+    prompt_version   TEXT NOT NULL,
+    scored_at        TEXT NOT NULL
+);
 """
 
 
@@ -379,10 +399,92 @@ def upsert_job(conn: sqlite3.Connection, job: "Job", region: int) -> bool:
 
 
 def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
-    """Best first: preferred region, then newest."""
+    """Best first: highest fit score (unscored last), then preferred region, then newest."""
     return conn.execute(
-        "SELECT * FROM jobs ORDER BY region, posted_at DESC, id DESC LIMIT ?", (limit,)
+        """
+        SELECT jobs.*, s.score, s.verdict FROM jobs
+        LEFT JOIN job_scores s ON s.job_id = jobs.id
+        ORDER BY s.score IS NULL, s.score DESC, region, posted_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
     ).fetchall()
+
+
+def get_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT jobs.*, d.full_description, s.score, s.verdict, s.cv, s.assessment_json,
+               s.unverified, s.model, s.prompt_version
+        FROM jobs
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        LEFT JOIN job_scores s ON s.job_id = jobs.id
+        WHERE jobs.id = ?
+        """,
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(job_id)
+    return row
+
+
+def jobs_to_score(
+    conn: sqlite3.Connection, rescore: bool = False, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """Jobs without a score (or all, with rescore), best region first."""
+    where = "" if rescore else "WHERE s.job_id IS NULL"
+    return conn.execute(
+        f"""
+        SELECT jobs.*, d.full_description FROM jobs
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        LEFT JOIN job_scores s ON s.job_id = jobs.id
+        {where}
+        ORDER BY region, posted_at DESC
+        LIMIT ?
+        """,
+        (-1 if limit is None else limit,),  # LIMIT -1 = no limit in SQLite
+    ).fetchall()
+
+
+def save_full_description(conn: sqlite3.Connection, job_id: int, text: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO job_details (job_id, full_description, fetched_at) "
+        "VALUES (?, ?, ?)",
+        (job_id, text, _now()),
+    )
+
+
+def save_score(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    score: int,
+    verdict: str,
+    cv: str,
+    assessment_json: str,
+    unverified: int,
+    model: str,
+    prompt_version: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO job_scores
+            (job_id, score, verdict, cv, assessment_json, unverified, model,
+             prompt_version, scored_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            score,
+            verdict,
+            cv,
+            assessment_json,
+            unverified,
+            model,
+            prompt_version,
+            _now(),
+        ),
+    )
 
 
 def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
@@ -407,4 +509,6 @@ def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
 
 def clear_jobs(conn: sqlite3.Connection) -> int:
     """Delete every stored job (they're public ads, re-fetchable). Returns how many."""
+    conn.execute("DELETE FROM job_scores")
+    conn.execute("DELETE FROM job_details")
     return conn.execute("DELETE FROM jobs").rowcount

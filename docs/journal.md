@@ -239,3 +239,25 @@ now rank with the South.
 **After collapsing repeat ads:** 1,241 results → 931 distinct → **47 kept**. 56 were the same
 ad posted again (mostly one agency's ads repeated across dozens of postcodes). The list went
 from 102 rows to 47 without losing a single distinct job.
+
+### Phase 4, step 2: fit scoring
+
+The local model (qwen3:8b) now compares each job ad with the right CV (a client-facing CV for
+Forward Deployed and Solutions roles, an AI Engineer CV for the rest) and returns a 0–100 fit
+score, requirements met (each quoting the ad), requirements missing (essential or not), and
+dealbreakers (clearance, PhD essential, far more years than the CV shows, fees).
+
+Same habits as the inbox classifier: a Pydantic schema, temperature 0, and quotes checked
+against the ad. New guards, all learned from one smoke test on a made-up ad:
+- **Years of experience are computed in code**, from the date ranges in the CV, and given to
+  the model as a fact. The 8B model, left to count, called five years "under three".
+- **Contradictions removed in code.** The model listed "strong Python" as missing while also
+  listing Python as met.
+- **The context window is set explicitly** (`num_ctx`). Ollama's default can be too small for a
+  CV plus a full job ad, and the overflow is cut off without any error.
+- **Constrained decoding truncates at the schema's length limit**, mid-word. A summary limit
+  that was too tight produced "…which she is close to meeting (she has". The limit is now
+  generous and the prompt asks for two sentences.
+- **Dealbreakers cap the score at 30 in code**, not just in the prompt.
+
+Smoke test: about 11–18 s per job on a laptop (the first call includes loading the model).
