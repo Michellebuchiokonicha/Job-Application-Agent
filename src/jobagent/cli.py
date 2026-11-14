@@ -720,6 +720,8 @@ def jobs_score(
     ] = False,
 ) -> None:
     """Compare each job with your CV using the local model, and store a fit score."""
+    import json
+    from dataclasses import asdict
 
     import httpx
 
@@ -740,7 +742,8 @@ def jobs_score(
     )
 
     verdicts: Counter = Counter()
-    failed = snippet_only = unverified = 0
+    failed = snippet_only = unverified_job = unverified_cv = not_proven = 0
+    verifier_failed = 0
     with Progress(console=console) as progress:
         task = progress.add_task("Scoring", total=len(rows))
         for row in rows:
@@ -766,20 +769,22 @@ def jobs_score(
             if fit is None:
                 failed += 1  # counted and reported, never a made-up score
             else:
-                a = fit.assessment
                 save_score(
                     conn,
                     row["id"],
-                    score=a.score,
-                    verdict=a.verdict,
+                    score=fit.score,
+                    verdict=fit.verdict,
                     cv=cv_key,
-                    assessment_json=a.model_dump_json(),
-                    unverified=fit.unverified_quotes,
+                    assessment_json=json.dumps(asdict(fit)),
+                    unverified=fit.unverified_job_quotes + fit.unverified_cv_quotes,
                     model=settings.inbox_model,
                     prompt_version=PROMPT_VERSION,
                 )
-                verdicts[a.verdict] += 1
-                unverified += fit.unverified_quotes
+                verdicts[fit.verdict] += 1
+                unverified_job += fit.unverified_job_quotes
+                unverified_cv += fit.unverified_cv_quotes
+                not_proven += fit.not_proven
+                verifier_failed += fit.verifier_failed
             progress.advance(task)
 
     scored = sum(verdicts.values())
@@ -793,7 +798,16 @@ def jobs_score(
         console.print(
             f"[yellow]  Scored on the snippet only (full ad unavailable): {snippet_only}[/]"
         )
-    console.print(f"[dim]  Quotes not found in the ad: {unverified}[/]")
+    console.print(
+        f"[dim]  Requirement quotes not found in the ad: {unverified_job} · "
+        f"'met' claims rejected (CV quote not in your CV): {unverified_cv} · "
+        f"(CV line doesn't prove it): {not_proven}[/]"
+    )
+    if verifier_failed:
+        console.print(
+            f"[yellow]  Second check gave no valid answer for {verifier_failed} job(s); "
+            "their 'met' claims weren't double-checked.[/]"
+        )
     console.print(
         "[dim]Best first: uv run jobagent jobs list · details: jobs show ID[/]"
     )
@@ -823,6 +837,12 @@ def jobs_show(
         console.print("Not scored yet. Run: uv run jobagent jobs score")
         return
     a = json.loads(r["assessment_json"])
+    if "requirements" not in a:  # scored before prompt v3 changed the format
+        console.print(
+            f"Scored with an older prompt ({r['prompt_version']}). "
+            "Run: uv run jobagent jobs score --rescore"
+        )
+        return
     console.print(
         Text.assemble(
             "Fit ", _fit_cell(r["score"]), f" · {r['verdict']} · CV: {r['cv']}"
@@ -833,15 +853,29 @@ def jobs_show(
         console.print("[red bold]Dealbreakers[/]")
         for d in a["dealbreakers"]:
             console.print(Text(f"  ✗ {d}"))
-    console.print("[green bold]You meet[/]")
-    for m in a["met"]:
-        console.print(Text(f"  ✓ {m['requirement']}: {m['cv_evidence']}"))
-    console.print("[yellow bold]Missing[/]")
-    for m in a["missing"]:
-        tag = " (essential)" if m["essential"] else ""
-        console.print(Text(f"  · {m['requirement']}{tag}"))
-    if r["unverified"]:
-        console.print(f"[dim]{r['unverified']} quote(s) not found in the ad.[/]")
+    if a["concerns"]:
+        console.print("[yellow bold]Check before applying[/]")
+        for c in a["concerns"]:
+            console.print(Text(f"  ! {c}"))
+
+    reqs = a["requirements"]
+    met = [q for q in reqs if q["met"]]
+    missing = [q for q in reqs if not q["met"]]
+    console.print(f"[green bold]You meet ({len(met)})[/]")
+    for q in met:
+        console.print(Text(f"  ✓ {q['requirement']}"))
+        console.print(Text(f'      your CV: "{q["cv_quote"]}"', style="dim"))
+    console.print(f"[yellow bold]Missing ({len(missing)})[/]")
+    for q in missing:
+        tag = " (essential)" if q["essential"] else " (nice to have)"
+        note = (
+            "  [claimed, but no matching line in your CV]"
+            if q["claimed_but_unverified"]
+            else ""
+        )
+        console.print(Text(f"  · {q['requirement']}{tag}{note}"))
+    if not reqs:
+        console.print("[dim]  The model listed no requirements.[/]")
 
 
 def _short_salary(low: float | None, high: float | None) -> str:

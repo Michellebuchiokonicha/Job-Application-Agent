@@ -166,3 +166,9 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Context window (`num_ctx`)**: How much text a model can read at once, in tokens. Ollama's default can be small, and longer input is cut off silently, so the scorer sets it explicitly.
 
 **Compute facts in code, not in the model**: Anything code can work out exactly (dates, counts, years of experience) is computed and handed to the model as a fact. Small models miscount; code doesn't.
+
+**Calibration**: Whether a score means what it says: does a 90 really fit better than a 70? A scorer that gives everything 85–95 is uncalibrated and can't rank anything. Fit scoring v1–v2 had this problem.
+
+**Decomposition (judge small, count in code)**: Splitting one big judgement ("how good a fit, 0–100?") into many small checkable ones ("is requirement X met? quote it"), then computing the total in code. More reliable with small models, and every point of the score can be traced to a reason.
+
+**Generate, then verify (verifier pass)**: A first model call proposes answers; a second, narrower call checks each one. Here: the first pass claims "requirement met, here's the CV line"; the verifier answers "does this line actually prove that?" Narrow yes/no questions are where small models are most reliable.

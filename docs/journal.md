@@ -261,3 +261,52 @@ against the ad. New guards, all learned from one smoke test on a made-up ad:
 - **Dealbreakers cap the score at 30 in code**, not just in the prompt.
 
 Smoke test: about 11–18 s per job on a laptop (the first call includes loading the model).
+
+### Fit scoring v3: the first real scores were too generous
+
+The first 3 real jobs scored 95, 85 and 85, all "strong". Reading the details showed why:
+the model filed nearly every requirement as "met", with unrelated evidence ("integrate AI
+with ERP and CRM systems" was "met" by an edtech app; "hybrid, central London" was "met" by
+"available to start in January"). One requirement was filed under "met" with the evidence
+text "Missing". The "missing" list was empty for both jobs.
+
+This is a **calibration** problem: a score that's always high can't rank anything.
+
+Redesign (prompt v3):
+- The model makes **one small judgement per requirement**: met or not, with an exact quote
+  from the ad and from the CV.
+- **Code verifies both quotes** and computes the score: 80 points for essential requirements
+  met, 20 for nice-to-haves. A "met" claim whose CV quote isn't in the CV counts as missing.
+- **"Essential" vs "nice to have" is read from the ad's own wording** ("Nice to have:",
+  "ideally", "bonus"), because the model's own labels were close to random.
+- Light paraphrases of CV lines are accepted (85% of the meaningful words must appear in the
+  CV); invented claims use words that aren't there.
+- Location, hybrid and contract type are no longer "requirements". Contract terms and start
+  dates go into a separate **"check before applying"** list.
+
+Smoke test on two made-up ads: a good fit scored 100, a poor fit (Scala, Spark, SC clearance)
+scored 0 with the clearance flagged as a dealbreaker. Before, both would likely have been "strong".
+
+Lesson: **small models are better at many narrow yes/no judgements than one holistic
+number.** Let them judge; let code count.
+
+### Fit scoring v4: a second check that the evidence proves the claim
+
+v3 fixed one job (AI Automation Engineer: 83, with Power Automate/n8n correctly missing and
+the contract flagged) but not the other: the AI Engineer job still scored 100. Every CV quote
+was **real**, but some proved nothing: "Built FastAPI services" was the evidence for
+"integration with ERP, CRM and finance systems"; Docker for "infrastructure as code"; giving
+talks for "using AI-assisted engineering tools". Checking that a quote *exists* doesn't check
+that it's *relevant*.
+
+v4 adds a **verifier pass**: a second, short call that sees only the pairs (requirement, CV
+line) and answers, for each, "does this line directly show this specific requirement?" Strict
+rules: named tools and domains must actually appear; general engineering doesn't prove a
+specific tool; teaching doesn't prove hands-on use. Rejected claims become "missing", and
+the score is recomputed. If the verifier fails, that's reported, never hidden.
+
+On a made-up ad with the same kinds of requirements: RAG, agents and stakeholder work stayed
+met; ERP/CRM integration and infrastructure-as-code were rejected. Score 60, "worth applying",
+which is honest.
+
+This is the **generate, then verify** pattern: one pass proposes, a second, narrower pass checks.
