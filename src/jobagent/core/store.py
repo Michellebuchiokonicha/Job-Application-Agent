@@ -400,3 +400,8 @@ def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
         ).fetchone()
         is not None
     )
+
+
+def clear_jobs(conn: sqlite3.Connection) -> int:
+    """Delete every stored job (they're public ads, re-fetchable). Returns how many."""
+    return conn.execute("DELETE FROM jobs").rowcount

@@ -76,95 +76,22 @@ _REMOTE = re.compile(r"\b(remote|work from home|home[- ]based|fully remote)\b")
 # Some ads give only a postcode ("CM20 1WG"). The letters at the start (the postcode
 # *area*) say roughly where it is.
 _POSTCODE = re.compile(r"^([A-Z]{1,2})\d[A-Z\d]?\s*(\d[A-Z]{2})?$")
+
+
+def _codes(text: str) -> frozenset[str]:
+    return frozenset(text.split())
+
+
 _AREAS = {
     # Scotland, Wales, Northern Ireland
-    Region.EXCLUDED: set(
-        [
-            "AB",
-            "DD",
-            "DG",
-            "EH",
-            "FK",
-            "G",
-            "HS",
-            "IV",
-            "KA",
-            "KW",
-            "KY",
-            "ML",
-            "PA",
-            "PH",
-            "TD",
-            "ZE",
-            "CF",
-            "LD",
-            "LL",
-            "NP",
-            "SA",
-            "BT",
-        ]
+    Region.EXCLUDED: _codes(
+        "AB DD DG EH FK G HS IV KA KW KY ML PA PH TD ZE CF LD LL NP SA BT"
     ),
     # inner London, then outer London boroughs
-    Region.LONDON: set(
-        [
-            "E",
-            "EC",
-            "N",
-            "NW",
-            "SE",
-            "SW",
-            "W",
-            "WC",
-            "BR",
-            "CR",
-            "EN",
-            "HA",
-            "IG",
-            "KT",
-            "RM",
-            "SM",
-            "TW",
-            "UB",
-        ]
-    ),
-    Region.SOUTH: set(
-        [
-            "AL",
-            "BA",
-            "BH",
-            "BN",
-            "BS",
-            "CB",
-            "CM",
-            "CO",
-            "CT",
-            "DA",
-            "DT",
-            "EX",
-            "GL",
-            "GU",
-            "HP",
-            "IP",
-            "LU",
-            "ME",
-            "MK",
-            "OX",
-            "PL",
-            "PO",
-            "RG",
-            "RH",
-            "SG",
-            "SL",
-            "SN",
-            "SO",
-            "SP",
-            "SS",
-            "TA",
-            "TN",
-            "TQ",
-            "TR",
-            "WD",
-        ]
+    Region.LONDON: _codes("E EC N NW SE SW W WC BR CR EN HA IG KT RM SM TW UB"),
+    Region.SOUTH: _codes(
+        "AL BA BH BN BS CB CM CO CT DA DT EX GL GU HP IP LU ME MK OX PL PO RG RH SG "
+        "SL SN SO SP SS TA TN TQ TR WD"
     ),
 }
 

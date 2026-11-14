@@ -268,3 +268,15 @@ def test_same_job_posted_twice_is_dropped(conn):
 )
 def test_short_salary(low, high, text):
     assert cli._short_salary(low, high) == text
+
+
+def test_clear(cli_env, monkeypatch):
+    class FakeReed:
+        def search(self, term, n):
+            return [job(external_id="1")]
+
+    monkeypatch.setattr(cli, "_make_reed", lambda settings: FakeReed())
+    CliRunner().invoke(cli.app, ["jobs", "fetch"])
+    result = CliRunner().invoke(cli.app, ["jobs", "clear", "--yes"])
+    assert "Deleted 1 jobs" in result.output
+    assert "No jobs yet" in CliRunner().invoke(cli.app, ["jobs", "list"]).output

@@ -197,3 +197,26 @@ doing the applying; once that stopped, sorting the inbox stopped being the bottl
 - A subtle bug caught while writing: in a Python `Enum`, two members with the same value
   become one (an *alias*). Giving "Remote" and "South" the same rank made every remote job
   display as "South".
+
+### First real fetch from Reed
+
+| | Count |
+|---|---|
+| Results from 6 searches | 841 |
+| Distinct jobs (the same job matches several searches) | 688 |
+| Dropped: title not a target role | 416 |
+| Dropped: older than 14 days | 183 |
+| Dropped: outside England | 5 |
+| **Kept** | **84** |
+
+Looking at the 84 by eye found four kinds of mistakes, each now fixed with a test:
+- **Cork** (Republic of Ireland) was ranked as England: the excluded list had "Ireland" but no
+  Irish towns.
+- **Postcode-only locations** ("CM20 1WG") fell through to "rest of England". The letters at
+  the start of a postcode (the *area*) now map to London, the South, or excluded.
+- **"Lead AI Data Scientist"** got in through the AI-word rule, although Data Scientist was
+  ruled out. Exclusions now win over inclusions.
+- **The same job posted twice** by an agency under two IDs. Same company + title + location
+  now counts as one job.
+
+Lesson: the first run on real data is a test you can't write in advance. Read the output.

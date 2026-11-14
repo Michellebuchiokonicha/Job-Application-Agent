@@ -680,6 +680,19 @@ def jobs_list(
     console.print("[dim]Tip: widen the terminal to see full titles.[/]")
 
 
+@jobs_app.command("clear")
+def jobs_clear(
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation.")] = False,
+) -> None:
+    """Delete all stored jobs, e.g. after the filters change. Re-fetch afterwards."""
+    from jobagent.core.store import clear_jobs
+
+    if not yes and not typer.confirm("Delete all stored jobs?"):
+        raise typer.Exit(1)
+    conn = _open_db(Settings.from_env())
+    console.print(f"Deleted {clear_jobs(conn)} jobs.")
+
+
 def _short_salary(low: float | None, high: float | None) -> str:
     """£60k–80k for yearly pay; £500–600/day for contract day rates."""
     if not low:
