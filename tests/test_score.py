@@ -281,6 +281,14 @@ def test_verifier_rejects_a_real_quote_that_proves_nothing():
     assert fit.score == 40  # 1 of 2 essentials (40) + 0 of 1 nice-to-have
 
 
+def test_summary_agrees_with_the_final_score():
+    # job 16 said "meets all essential requirements" next to six missing ones
+    fit = score_with(assessment(), reject={2})
+    assert fit.summary == (
+        "Meets 1 of 2 essentials and 0 of 1 nice-to-haves. Main gaps: RAG."
+    )
+
+
 def test_verifier_failure_is_reported_not_hidden():
     class BrokenVerifier(FakeChat):
         def chat(self, **kwargs):

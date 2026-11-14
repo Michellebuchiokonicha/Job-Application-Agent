@@ -310,3 +310,30 @@ met; ERP/CRM integration and infrastructure-as-code were rejected. Score 60, "wo
 which is honest.
 
 This is the **generate, then verify** pattern: one pass proposes, a second, narrower pass checks.
+
+**First real run of v4** (3 jobs): the AI Engineer job dropped from 100 to 52; the verifier
+rejected 10 weak claims, and no quote was invented. Two new problems showed up:
+
+- **The summary contradicted the score.** "Candidate meets all essential requirements" sat
+  next to six missing essentials. The model wrote the summary in the first pass, *before*
+  the verifier removed claims. The summary described a result that no longer existed.
+- **Bundled requirements were judged wrongly in both directions.** "Full-stack AI apps, from
+  data pipelines and APIs to agent services and web front ends" is four skills in one line;
+  missing one failed all four (too strict). "CI/CD, observability, infrastructure as code"
+  passed on a Docker line (too generous). One yes/no can't be right about four things.
+
+The run also showed real **CV gaps**: front-end work, Terraform and GitHub Actions were true
+but not on the CV. Those are now added. A scorer that explains itself is also a CV
+reviewer.
+
+### Fit scoring v5: one skill per requirement, summary written by code
+
+- The prompt now asks for **one skill or tool per requirement**: lists in the ad are split,
+  each with the shortest quote that names it. The verifier then answers one narrow question
+  at a time.
+- The model no longer writes a summary. Code builds it from the verified results ("Meets 4 of
+  10 essentials and 1 of 1 nice-to-haves. Main gaps: …"). It can't disagree with the
+  score because it's computed from the same data.
+
+Lesson: **anything derived must be derived after the last step that changes the data.**
+Otherwise, it reports a state that no longer exists, like a cache that's never invalidated.

@@ -172,3 +172,7 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Decomposition (judge small, count in code)**: Splitting one big judgement ("how good a fit, 0–100?") into many small checkable ones ("is requirement X met? quote it"), then computing the total in code. More reliable with small models, and every point of the score can be traced to a reason.
 
 **Generate, then verify (verifier pass)**: A first model call proposes answers; a second, narrower call checks each one. Here: the first pass claims "requirement met, here's the CV line"; the verifier answers "does this line actually prove that?" Narrow yes/no questions are where small models are most reliable.
+
+**Stale derived data**: A value computed from data that later changed, so it now describes a state that no longer exists, like a cache that's never invalidated. Here: the model's summary ("meets all essentials") was written before the verifier removed claims. Fix: derive it after the last step that changes the data, or compute it from the final data in code.
+
+**Atomic requirement**: One skill or tool per requirement ("Terraform"), not a bundle ("CI/CD, observability and infrastructure as code"). A single yes/no about a bundle is wrong whenever the candidate has some but not all of it.

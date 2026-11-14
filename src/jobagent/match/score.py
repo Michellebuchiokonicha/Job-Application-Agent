@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from jobagent.inbox.classify import ChatClient
 
-PROMPT_VERSION = "v4"  # v4: second pass checks each CV quote really proves the claim
+PROMPT_VERSION = "v5"  # v5: one skill per requirement; summary written by code
 MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
@@ -29,9 +29,11 @@ NUM_CTX = 16384
 SYSTEM_PROMPT = """\
 You are a strict, careful recruiter. Check one job ad against the candidate's CV.
 
-1. List the job's requirements: skills, experience, qualifications, tools. One per item, \
-copied from the ad (job_quote, exact words). Mark essential = false for "nice to have", \
-"ideally", "bonus", "desirable".
+1. List the job's requirements: skills, experience, qualifications, tools. ONE skill or \
+tool per item: split lists, so "CI/CD, observability and infrastructure as code" is three \
+requirements. job_quote: the shortest exact words from the ad that name that one thing \
+(e.g. "infrastructure as code"). Mark essential = false for "nice to have", "ideally", \
+"bonus", "desirable".
    Do NOT list location, hybrid/remote, contract type, salary or benefits as requirements.
 2. For each requirement decide met = true only if the CV shows THE SAME skill or \
 experience. A related but different skill does not count (e.g. building an edtech app is \
@@ -44,9 +46,7 @@ essential, far more years of experience than CANDIDATE FACTS, a fee to join.
 immediate start (the candidate is available from the date in CANDIDATE FACTS), on-site \
 outside London, heavy travel.
 5. Years of experience: use CANDIDATE FACTS (computed from the CV's dates). Do not count \
-years yourself.
-
-summary: at most two short sentences."""
+years yourself."""
 
 
 class Requirement(BaseModel):
@@ -80,8 +80,8 @@ class Verification(BaseModel):
 
 
 class FitAssessment(BaseModel):
-    # Limits are generous: constrained decoding cuts text off mid-word at the limit.
-    summary: str = Field(max_length=800)
+    # No summary from the model: it was written before verification and could contradict
+    # the final result ("meets all essentials" next to six missing). Code writes it instead.
     requirements: list[Requirement]
     dealbreakers: list[str]
     concerns: list[str]
@@ -270,6 +270,21 @@ def compute_score(reqs: list[CheckedRequirement], dealbreakers: list[str]) -> in
     return min(score, 30) if dealbreakers else score
 
 
+def summarise(reqs: list[CheckedRequirement], dealbreakers: list[str]) -> str:
+    """One line built from the checked results, so it always agrees with the score."""
+    essential = [r for r in reqs if r.essential]
+    optional = [r for r in reqs if not r.essential]
+    parts = [f"Meets {sum(r.met for r in essential)} of {len(essential)} essentials"]
+    if optional:
+        parts.append(f"{sum(r.met for r in optional)} of {len(optional)} nice-to-haves")
+    text = " and ".join(parts) + "."
+    if gaps := [r.requirement for r in essential if not r.met]:
+        text += " Main gaps: " + "; ".join(gaps[:3]) + ("…" if len(gaps) > 3 else ".")
+    if dealbreakers:
+        text += " Dealbreaker: " + "; ".join(dealbreakers) + "."
+    return text
+
+
 def verdict_for(score: int) -> str:
     if score >= 80:
         return "strong"
@@ -305,7 +320,7 @@ def check(assessment: FitAssessment, description: str, cv: str) -> Fit:
     return Fit(
         score=score,
         verdict=verdict_for(score),
-        summary=assessment.summary,
+        summary=summarise(checked, assessment.dealbreakers),
         requirements=checked,
         dealbreakers=assessment.dealbreakers,
         concerns=assessment.concerns,
@@ -377,5 +392,6 @@ class FitScorer:
             fit.not_proven = len(rejected & set(range(1, len(claims) + 1)))
             fit.score = compute_score(fit.requirements, fit.dealbreakers)
             fit.verdict = verdict_for(fit.score)
+            fit.summary = summarise(fit.requirements, fit.dealbreakers)
             return
         fit.verifier_failed = True  # reported, so it's never silently trusted
