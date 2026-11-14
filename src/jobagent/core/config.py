@@ -30,6 +30,7 @@ class Settings:
     db_path: Path
     ollama_host: str = DEFAULT_OLLAMA_HOST
     inbox_model: str = DEFAULT_INBOX_MODEL
+    reed_api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,4 +46,5 @@ class Settings:
             db_path=Path(os.getenv("DB_PATH") or DEFAULT_DB_PATH).expanduser(),
             ollama_host=os.getenv("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST,
             inbox_model=os.getenv("INBOX_MODEL") or DEFAULT_INBOX_MODEL,
+            reed_api_key=os.getenv("REED_API_KEY") or None,
         )

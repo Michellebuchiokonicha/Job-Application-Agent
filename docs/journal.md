@@ -171,3 +171,29 @@ Widening the definition of "confirmation" made the model see confirmations every
 nearby is a **regression**, and this is why you always rerun the whole eval, not just the cases
 you meant to fix. A small trap: 37/39 = 0.949 was printed rounded as "0.95", which *looks* like it
 meets a ≥ 0.95 target but doesn't.
+
+## 2026-11-14: Change of direction: finding jobs comes first
+
+The inbox classifier is paused. It works, but it solves a problem I don't have yet: a sorted
+inbox doesn't get me a job. New priority order: **find and apply for jobs → interview prep →
+inbox sorting → notifications**. The classifier work isn't wasted: later it tells the agent
+which applications got replies, which feeds the learning loop.
+
+Lesson: re-check the plan when the facts change. The original order assumed another tool was
+doing the applying; once that stopped, sorting the inbox stopped being the bottleneck.
+
+### Phase 4, step 1: Reed source, filters, storage
+
+- **One `Job` shape for every source.** Reed now, Greenhouse/Lever/Ashby and others later;
+  the filters and the database never need to know where a job came from.
+- **A funnel, cheapest first.** Rule-based filters (role title, England only, posted in the
+  last 14 days) run before anything expensive. Later, the local LLM scores only what survives.
+- **Nothing dropped silently.** `jobs fetch` reports how many jobs were dropped and why.
+- **Idempotent storage.** `UNIQUE (source, external_id)` plus an *upsert*: fetching the same
+  job twice stores it once and just updates `last_seen_at`.
+- **Untrusted input again.** Job ads are shown with `Text(...)`, never parsed as Rich markup.
+- **No network in tests.** `httpx.MockTransport` plays the Reed API, so tests check paging,
+  auth headers and error handling without a key or internet.
+- A subtle bug caught while writing: in a Python `Enum`, two members with the same value
+  become one (an *alias*). Giving "Remote" and "South" the same rank made every remote job
+  display as "South".

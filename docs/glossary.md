@@ -146,3 +146,17 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Regression**: A change that fixes one thing but breaks something that used to work. Here: prompt v2 fixed all 6 targeted errors but created 9 new ones (7 `other` → confirmation, 2 assessment → confirmation). That's why the whole eval is rerun after every change.
 
 **Precision/recall trade-off**: Making a class easier to predict catches more of it (recall up) but also produces more false alarms (precision down). Prompt v2 took confirmation recall from 0.88 to 1.00 and its precision from 0.97 to 0.82.
+
+## Job sources and matching
+
+**ATS (applicant tracking system)**: The software companies use to post jobs and receive applications: Greenhouse, Lever, Ashby, Workable and others. Most publish a free, public list of each company's open jobs, which is how the agent reads "company sites" without scraping.
+
+**Aggregator**: A site that collects job ads from many places into one search (Adzuna, Jooble). Wide coverage, but often only a snippet of each ad.
+
+**Funnel (filtering)**: Running cheap checks first and expensive ones only on what survives. Here: regex filters on title and location (instant), then an LLM fit score (about 2 s per job), then human review.
+
+**Upsert**: "Insert, or update if it already exists." Here: `ON CONFLICT (source, external_id) DO UPDATE`, so re-fetching a job never duplicates it.
+
+**Test double / mock transport**: A stand-in for a real dependency during tests. Here: `httpx.MockTransport` answers like the Reed API, so tests need no key and no internet.
+
+**Enum alias**: In Python, two `Enum` members with the same value are the same member; the second name is just an alias. Caught here when "Remote" and "South" shared a rank.

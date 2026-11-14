@@ -19,6 +19,7 @@ if (
     TYPE_CHECKING
 ):  # import only for type hints, avoiding a core -> gmail runtime dependency
     from jobagent.gmail.parse import ParsedEmail
+    from jobagent.sources.base import Job
 
 
 class Source(StrEnum):
@@ -100,6 +101,27 @@ CREATE TABLE IF NOT EXISTS raw_emails (
 
 CREATE INDEX IF NOT EXISTS ix_raw_emails_thread ON raw_emails (thread_id);
 CREATE INDEX IF NOT EXISTS ix_raw_emails_received ON raw_emails (received_at);
+
+-- Jobs found by the sources (Phase 4). Only jobs that passed the filters are stored.
+CREATE TABLE IF NOT EXISTS jobs (
+    id              INTEGER PRIMARY KEY,
+    source          TEXT NOT NULL,        -- "reed", "greenhouse", ...
+    external_id     TEXT NOT NULL,        -- the source's own ID
+    title           TEXT NOT NULL,
+    company         TEXT NOT NULL,
+    location        TEXT NOT NULL,
+    region          INTEGER NOT NULL,     -- match.filters.Region: 0 London ... 3 England
+    url             TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    salary_min      REAL,
+    salary_max      REAL,
+    posted_at       TEXT,                 -- ISO date
+    first_seen_at   TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    UNIQUE (source, external_id)          -- idempotent: fetching twice stores once
+);
+
+CREATE INDEX IF NOT EXISTS ix_jobs_rank ON jobs (region, posted_at);
 """
 
 
@@ -316,3 +338,65 @@ def get_raw_email(conn: sqlite3.Connection, gmail_message_id: str) -> sqlite3.Ro
 
 def count_raw_emails(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM raw_emails").fetchone()[0]
+
+
+def upsert_job(conn: sqlite3.Connection, job: "Job", region: int) -> bool:
+    """Store a job, or refresh last_seen_at if we already have it. Returns True if new.
+
+    ON CONFLICT ... DO UPDATE is an "upsert": insert, or update the existing row.
+    last_seen_at tells us later which jobs have been taken down.
+    """
+    now = _now()
+    existed = conn.execute(
+        "SELECT 1 FROM jobs WHERE source = ? AND external_id = ?",
+        (job.source, job.external_id),
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO jobs (source, external_id, title, company, location, region, url,
+                          description, salary_min, salary_max, posted_at,
+                          first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (source, external_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        """,
+        (
+            job.source,
+            job.external_id,
+            job.title,
+            job.company,
+            job.location,
+            int(region),
+            job.url,
+            job.description,
+            job.salary_min,
+            job.salary_max,
+            job.posted_at.isoformat() if job.posted_at else None,
+            now,
+            now,
+        ),
+    )
+    return existed is None
+
+
+def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
+    """Best first: preferred region, then newest."""
+    return conn.execute(
+        "SELECT * FROM jobs ORDER BY region, posted_at DESC, id DESC LIMIT ?", (limit,)
+    ).fetchall()
+
+
+def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
+    """Is this job already stored under a *different* ID? Agencies often post the same
+    job several times; same company + title + location (ignoring case) = same job."""
+    return (
+        conn.execute(
+            """
+            SELECT 1 FROM jobs
+            WHERE lower(company) = lower(?) AND lower(title) = lower(?)
+              AND lower(location) = lower(?)
+              AND NOT (source = ? AND external_id = ?)
+            """,
+            (job.company, job.title, job.location, job.source, job.external_id),
+        ).fetchone()
+        is not None
+    )

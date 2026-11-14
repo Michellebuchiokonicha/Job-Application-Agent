@@ -596,5 +596,99 @@ def _review_errors(conn, errors, labels_path: Path, classifier: str) -> None:
     )
 
 
+# --- Jobs (Phase 4) ---------------------------------------------------------
+
+jobs_app = typer.Typer(help="Find and review jobs.", no_args_is_help=True)
+app.add_typer(jobs_app, name="jobs")
+
+
+def _make_reed(settings: Settings):
+    """Separate function so tests can swap in a fake client."""
+    from jobagent.sources.reed import ReedClient
+
+    if not settings.reed_api_key:
+        console.print(
+            "[red]No Reed API key.[/] Get a free one at reed.co.uk/developers and add "
+            "REED_API_KEY=... to .env"
+        )
+        raise typer.Exit(2)
+    return ReedClient(settings.reed_api_key)
+
+
+@jobs_app.command("fetch")
+def jobs_fetch(
+    days: Annotated[int, typer.Option(help="Ignore jobs posted longer ago.")] = 14,
+    max_per_search: Annotated[
+        int, typer.Option(help="Results to read per search term.")
+    ] = 200,
+) -> None:
+    """Search the job sources, filter, and store new matches."""
+    import httpx
+
+    from jobagent.sources.feed import fetch_jobs
+
+    settings = Settings.from_env()
+    conn = _open_db(settings)
+    reed = _make_reed(settings)
+    try:
+        stats = fetch_jobs(
+            conn, reed.search, datetime.now(UTC).date(), max_per_search, days
+        )
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code
+        hint = " (check REED_API_KEY in .env)" if code in (401, 403) else ""
+        console.print(f"[red]Reed returned HTTP {code}{hint}.[/]")
+        raise typer.Exit(1) from e
+    except httpx.TransportError as e:
+        console.print(f"[red]Couldn't reach Reed:[/] {e}")
+        raise typer.Exit(1) from e
+
+    console.print(
+        f"Reed: {stats.seen} results, {stats.unique} distinct jobs, "
+        f"[green]{stats.kept} match[/] ({stats.new} new)."
+    )
+    for reason, n in stats.dropped.most_common():
+        console.print(f"  dropped {n}: {reason}")
+    console.print("[dim]See them with: uv run jobagent jobs list[/]")
+
+
+@jobs_app.command("list")
+def jobs_list(
+    limit: Annotated[int, typer.Option(help="How many to show.")] = 30,
+) -> None:
+    """Stored jobs, best region first, then newest."""
+    from jobagent.core.store import list_jobs
+    from jobagent.match.filters import Region
+
+    conn = _open_db(Settings.from_env())
+    rows = list_jobs(conn, limit)
+    if not rows:
+        console.print("No jobs yet. Run: uv run jobagent jobs fetch")
+        return
+    table = Table("ID", "Title", "Company", "Where", "Posted", "Salary")
+    for r in rows:
+        posted = r["posted_at"]
+        table.add_row(
+            str(r["id"]),
+            Text(r["title"]),  # Text(): job ads are untrusted, never parsed as markup
+            Text(r["company"]),
+            Text(f"{r['location']} ({Region(r['region']).name.title()})"),
+            datetime.fromisoformat(posted).strftime("%d %b") if posted else "",
+            _short_salary(r["salary_min"], r["salary_max"]),
+        )
+    console.print(table)
+    console.print("[dim]Tip: widen the terminal to see full titles.[/]")
+
+
+def _short_salary(low: float | None, high: float | None) -> str:
+    """£60k–80k for yearly pay; £500–600/day for contract day rates."""
+    if not low:
+        return ""
+    high = high or low
+    if high < 2000:  # nobody's yearly salary is under £2,000: it's a day rate
+        return f"£{low:,.0f}–{high:,.0f}/day"
+    return f"£{low / 1000:.0f}k–{high / 1000:.0f}k"
+
+
 if __name__ == "__main__":
     app()
