@@ -446,6 +446,19 @@ def jobs_to_score(
     ).fetchall()
 
 
+def scored_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every scored job with what's needed to recount it: title, ad and saved judgements."""
+    return conn.execute(
+        """
+        SELECT jobs.id, jobs.title, d.full_description, jobs.description, s.cv,
+               s.score, s.assessment_json, s.unverified, s.model, s.prompt_version
+        FROM jobs
+        JOIN job_scores s ON s.job_id = jobs.id
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        """
+    ).fetchall()
+
+
 def save_full_description(conn: sqlite3.Connection, job_id: int, text: str) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO job_details (job_id, full_description, fetched_at) "

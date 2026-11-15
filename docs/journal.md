@@ -383,3 +383,28 @@ matches how a human would read it: strong on the AI core, missing the enterprise
 Lesson: **the unit you judge and the unit you weight don't have to be the same.** Fine
 units make judgements accurate; the weighting should follow the structure the author gave
 (the ad's bullets).
+
+### First full run (46 jobs) and the first human review
+
+Spread: strong 5 · worth applying 7 · stretch 17 · poor fit 17. v1 put nearly everything at
+85–95; now the scorer separates jobs. The code guards did a lot of work: 327 requirements
+not found in the ad were dropped, 54 fake CV quotes and 155 unproven claims rejected.
+
+I reviewed the two top scores by hand and both were wrong, for reasons the model can't see:
+
+- **97 for "AI Automation Engineer (Python, R, Shiny)"**, missing R/Shiny. Per-line weighting
+  made it one gap among 15, but it's **in the job title**: the core of the job. New rule: a
+  missing skill that the title names caps the score at 55 ("stretch").
+- **80 for an ML Engineer job "in Abingdon"** that is "USA based (Fully Remote)", paid in
+  dollars. Reed listed it under the recruiter's UK office. New check in code, at fetch and
+  at scoring: "USA based", "within the USA" or a dollar salary → dropped / dealbreaker.
+  Case-sensitive, so "join us based in London" doesn't trigger it.
+
+Also new: **`jobs recount`** re-applies the current scoring rules to the saved judgements,
+with no model call. Rules changed three times without the model's answers changing; a full
+rescore takes 20 minutes, a recount takes seconds. Keeping *judgements* (slow, model) apart
+from *counting* (fast, code) is what makes that possible.
+
+Lesson: **a human review of the top of the list is the cheapest eval there is.** Two jobs
+checked, two rule bugs found. The errors that matter most sit at the top, because those are
+the jobs you'd apply to.

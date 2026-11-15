@@ -312,3 +312,20 @@ def test_same_ad_in_many_postcodes_is_one_job(conn):
     ]
     stats = fetch_jobs(conn, lambda t, n: jobs, TODAY, terms=["a"])
     assert (stats.kept, stats.dropped["same job posted again"]) == (1, 2)
+
+
+@pytest.mark.parametrize(
+    ("text", "abroad"),
+    [
+        ("USA based (Fully Remote)", True),
+        ("Fully remote working within the USA", True),
+        ("Salary $180,000 to $200,000", True),
+        ("Join us based in our London office", False),
+        ("We work with US clients and raised $50M", False),
+        ("", False),
+    ],
+)
+def test_based_abroad(text, abroad):
+    from jobagent.match.filters import based_abroad
+
+    assert based_abroad(text) is abroad

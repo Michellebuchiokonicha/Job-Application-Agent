@@ -13,12 +13,13 @@ Small models are better at narrow yes/no judgements than at one holistic number.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from pydantic import BaseModel, Field, ValidationError
 
 from jobagent.inbox.classify import ChatClient
+from jobagent.match.filters import based_abroad
 
 PROMPT_VERSION = "v6"  # v6: verifier sees the ad; fair on general requirements
 MAX_JOB_CHARS = 8000
@@ -117,6 +118,9 @@ class Fit:
     unverified_cv_quotes: int  # "met" claims whose CV quote isn't in the CV
     not_proven: int = 0  # "met" claims the verifier rejected as not proving the point
     verifier_failed: bool = False  # second pass gave no valid answer: claims left as-is
+    title_gaps: list[str] = field(
+        default_factory=list
+    )  # missing skills named in the title
 
 
 def _normalise(text: str) -> str:
@@ -314,6 +318,36 @@ def summarise(reqs: list[CheckedRequirement], dealbreakers: list[str]) -> str:
     return text
 
 
+# Missing a skill the job title names ("AI Automation Engineer (Python, R, Shiny)") means
+# missing the core of the job, however many other lines are met: cap at "stretch".
+TITLE_GAP_CAP = 55
+ABROAD = "Based outside the UK: you can't take it from here"
+
+
+def title_gaps(reqs: list[CheckedRequirement], title: str) -> list[str]:
+    """Unmet requirements whose every word is in the job title (e.g. "R/Shiny")."""
+    in_title = set(_WORD.findall(title.lower()))
+    return [
+        r.requirement
+        for r in reqs
+        if not r.met
+        and (words := _WORD.findall(r.requirement.lower()))
+        and all(w in in_title for w in words)
+    ]
+
+
+def finalise(fit: Fit, title: str) -> None:
+    """Score, verdict and summary from the final requirements. Run after every change."""
+    fit.title_gaps = title_gaps(fit.requirements, title)
+    score = compute_score(fit.requirements, fit.dealbreakers)
+    if fit.title_gaps:
+        score = min(score, TITLE_GAP_CAP)
+    fit.score, fit.verdict = score, verdict_for(score)
+    fit.summary = summarise(fit.requirements, fit.dealbreakers)
+    if fit.title_gaps:
+        fit.summary += " The job title names " + ", ".join(fit.title_gaps) + "."
+
+
 def verdict_for(score: int) -> str:
     if score >= 80:
         return "strong"
@@ -324,7 +358,7 @@ def verdict_for(score: int) -> str:
     return "poor fit"
 
 
-def check(assessment: FitAssessment, description: str, cv: str) -> Fit:
+def check(assessment: FitAssessment, description: str, cv: str, title: str = "") -> Fit:
     """Verify every quote, then compute the score from what survived."""
     checked = []
     seen = set()
@@ -355,17 +389,41 @@ def check(assessment: FitAssessment, description: str, cv: str) -> Fit:
                 ad_line=ad_line(r.job_quote, description),
             )
         )
-    score = compute_score(checked, assessment.dealbreakers)
-    return Fit(
-        score=score,
-        verdict=verdict_for(score),
-        summary=summarise(checked, assessment.dealbreakers),
+    dealbreakers = list(assessment.dealbreakers)
+    if based_abroad(description):  # checked in code: the model missed "USA based"
+        dealbreakers.append(ABROAD)
+    fit = Fit(
+        score=0,
+        verdict="",
+        summary="",
         requirements=checked,
-        dealbreakers=assessment.dealbreakers,
+        dealbreakers=dealbreakers,
         concerns=assessment.concerns,
         unverified_job_quotes=unverified_job,
         unverified_cv_quotes=unverified_cv,
     )
+    finalise(fit, title)
+    return fit
+
+
+def recount(saved: dict, description: str, title: str) -> Fit:
+    """Re-apply today's scoring rules to judgements saved earlier. No model call.
+
+    The model's yes/no answers are kept; only the counting is redone (weights, caps,
+    dealbreakers found in code). Use after changing scoring rules, not the prompt.
+    """
+    reqs = [
+        CheckedRequirement(
+            **{**r, "ad_line": ad_line(r.get("job_quote", ""), description)}
+        )
+        for r in saved["requirements"]
+    ]
+    fit = Fit(**{**saved, "requirements": reqs})
+    fit.dealbreakers = [d for d in fit.dealbreakers if d != ABROAD]
+    if based_abroad(description):
+        fit.dealbreakers.append(ABROAD)
+    finalise(fit, title)
+    return fit
 
 
 class FitScorer:
@@ -393,8 +451,9 @@ class FitScorer:
                 )
             except ValidationError:
                 continue
-            fit = check(assessment, description, cv)
+            fit = check(assessment, description, cv, title)
             self._verify(fit)
+            finalise(fit, title)  # again: the verifier may have changed what's met
             return fit
         return None  # never valid: the caller records a failure, never a fake score
 
@@ -430,8 +489,5 @@ class FitScorer:
                 if i in rejected:
                     r.met, r.not_proven = False, True
             fit.not_proven = len(rejected & set(range(1, len(claims) + 1)))
-            fit.score = compute_score(fit.requirements, fit.dealbreakers)
-            fit.verdict = verdict_for(fit.score)
-            fit.summary = summarise(fit.requirements, fit.dealbreakers)
             return
         fit.verifier_failed = True  # reported, so it's never silently trusted

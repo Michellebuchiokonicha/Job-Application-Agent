@@ -152,12 +152,28 @@ class Verdict:
     region: Region
 
 
+# Reed lists some US jobs under a UK town (the recruiter's office), so the location field
+# alone isn't enough: one "Abingdon" job was "USA based (Fully Remote)", paid in dollars.
+# Case-sensitive on purpose: "join us based in London" must not match.
+_ABROAD = re.compile(
+    r"\b(?:USA|US|U\.S\.|United States)[- ]based\b"
+    r"|\bwithin the (?:USA|US|United States)\b"
+    r"|\$\s?\d{2,3},\d{3}\b"  # a salary in dollars: "$180,000"
+)
+
+
+def based_abroad(text: str) -> bool:
+    return bool(_ABROAD.search(text or ""))
+
+
 def check(job: Job, today: date, max_age_days: int = 14) -> Verdict:
     region = region_for(job.location)
     if not matches_role(job.title):
         return Verdict(False, "title not a target role", region)
     if region is Region.EXCLUDED:
         return Verdict(False, "outside England", region)
+    if based_abroad(job.description):
+        return Verdict(False, "based outside the UK", region)
     if job.posted_at and job.posted_at < today - timedelta(days=max_age_days):
         return Verdict(False, f"older than {max_age_days} days", region)
     return Verdict(True, "", region)

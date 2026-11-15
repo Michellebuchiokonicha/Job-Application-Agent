@@ -813,6 +813,49 @@ def jobs_score(
     )
 
 
+@jobs_app.command("recount")
+def jobs_recount() -> None:
+    """Re-apply the current scoring rules to saved judgements: seconds, no model calls."""
+    import json
+    from dataclasses import asdict
+
+    from jobagent.core.store import save_score, scored_jobs
+    from jobagent.match.score import PROMPT_VERSION, recount
+
+    conn = _open_db(Settings.from_env())
+    changed = skipped = 0
+    for row in scored_jobs(conn):
+        if row["prompt_version"] != PROMPT_VERSION:
+            skipped += (
+                1  # older judgements were made differently: rescore those instead
+            )
+            continue
+        description = row["full_description"] or row["description"]
+        fit = recount(json.loads(row["assessment_json"]), description, row["title"])
+        if fit.score != row["score"]:
+            console.print(
+                f"  {row['id']:>3}  {row['score']:>3} → {fit.score:<3} {row['title']}"
+            )
+            changed += 1
+        save_score(
+            conn,
+            row["id"],
+            score=fit.score,
+            verdict=fit.verdict,
+            cv=row["cv"],
+            assessment_json=json.dumps(asdict(fit)),
+            unverified=row["unverified"],
+            model=row["model"],
+            prompt_version=PROMPT_VERSION,
+        )
+    console.print(f"Recounted with current rules: {changed} score(s) changed.")
+    if skipped:
+        console.print(
+            f"[yellow]  {skipped} scored with an older prompt: "
+            "run `jobs score --rescore` for those.[/]"
+        )
+
+
 @jobs_app.command("show")
 def jobs_show(
     job_id: Annotated[int, typer.Argument(help="Job ID from jobs list.")],

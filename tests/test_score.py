@@ -381,3 +381,38 @@ def test_partly_met_line_gets_partial_credit():
         "t", "c", ad, CV
     )
     assert fit.score == 67  # one line, 2 of 3 met
+
+
+def test_missing_a_skill_named_in_the_title_caps_the_score():
+    reqs = [
+        req("Python", "strong Python", True, "Python, FastAPI"),
+        req("RAG", "experience with RAG pipelines", True, "Architected RAG pipelines"),
+        req("R/Shiny", "Kubernetes is a bonus", False),  # quote just needs to be in AD
+    ]
+    chat = FakeChat(assessment(requirements=reqs))
+    fit = FitScorer(chat, "m").score("AI Engineer (Python, R, Shiny)", "c", AD, CV)
+    assert fit.title_gaps == ["R/Shiny"]
+    assert fit.score == 55 and fit.verdict == "stretch"
+    assert "title names R/Shiny" in fit.summary
+
+
+def test_job_based_in_the_us_is_a_dealbreaker():
+    ad = AD + "\nUSA based (Fully Remote). $180,000 to $200,000 base."
+    fit = FitScorer(FakeChat(assessment()), "m").score("ML Engineer", "c", ad, CV)
+    assert fit.score <= 30 and any("outside the UK" in d for d in fit.dealbreakers)
+
+
+def test_recount_applies_new_rules_without_the_model(scored_env):
+    CliRunner().invoke(cli.app, ["jobs", "score"])
+    out = CliRunner().invoke(cli.app, ["jobs", "recount"]).output
+    assert "Recounted with current rules: 0 score(s) changed." in out
+
+
+def test_recount_keeps_judgements_and_applies_new_rules():
+    from jobagent.match.score import recount
+
+    saved = asdict(score_with(assessment()))
+    assert saved["score"] == 80
+    fit = recount(saved, AD + "\nUSA based (Fully Remote)", "ML Engineer")
+    assert fit.score == 30 and [r.met for r in fit.requirements] == [True, True, False]
+    assert recount(asdict(fit), AD, "ML Engineer").score == 80  # rule no longer applies
