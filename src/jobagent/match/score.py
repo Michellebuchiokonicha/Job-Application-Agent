@@ -324,8 +324,50 @@ TITLE_GAP_CAP = 55
 ABROAD = "Based outside the UK: you can't take it from here"
 
 
+# Words that name the role itself, not a skill. "Machine Learning" missing from a "Machine
+# Learning Engineer" job is a model error (it once cited a CV heading as proof, which was
+# rightly rejected), not a real gap: it must not trigger the cap.
+_ROLE_WORDS = frozenset(
+    [
+        "senior",
+        "junior",
+        "lead",
+        "principal",
+        "staff",
+        "head",
+        "mid",
+        "level",
+        "machine",
+        "learning",
+        "ml",
+        "ai",
+        "artificial",
+        "intelligence",
+        "engineer",
+        "engineering",
+        "developer",
+        "scientist",
+        "science",
+        "data",
+        "applied",
+        "forward",
+        "deployed",
+        "solutions",
+        "solution",
+        "architect",
+        "automation",
+        "mlops",
+        "ops",
+        "software",
+        "generative",
+        "genai",
+        "agentic",
+    ]
+)
+
+
 def title_gaps(reqs: list[CheckedRequirement], title: str) -> list[str]:
-    """Unmet requirements whose every word is in the job title (e.g. "R/Shiny")."""
+    """Unmet skills named in the job title (e.g. "R/Shiny"), ignoring the role's own words."""
     in_title = set(_WORD.findall(title.lower()))
     return [
         r.requirement
@@ -333,6 +375,7 @@ def title_gaps(reqs: list[CheckedRequirement], title: str) -> list[str]:
         if not r.met
         and (words := _WORD.findall(r.requirement.lower()))
         and all(w in in_title for w in words)
+        and not all(w in _ROLE_WORDS for w in words)
     ]
 
 

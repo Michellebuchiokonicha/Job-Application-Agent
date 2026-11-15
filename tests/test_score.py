@@ -416,3 +416,14 @@ def test_recount_keeps_judgements_and_applies_new_rules():
     fit = recount(saved, AD + "\nUSA based (Fully Remote)", "ML Engineer")
     assert fit.score == 30 and [r.met for r in fit.requirements] == [True, True, False]
     assert recount(asdict(fit), AD, "ML Engineer").score == 80  # rule no longer applies
+
+
+def test_role_words_in_the_title_are_not_a_skill_gap():
+    from jobagent.match.score import CheckedRequirement, title_gaps
+
+    def missing(name):
+        return CheckedRequirement(name, True, False, "", False)
+
+    reqs = [missing("Machine Learning"), missing("TypeScript")]
+    title = "Senior Machine Learning Engineer (TypeScript)"
+    assert title_gaps(reqs, title) == ["TypeScript"]

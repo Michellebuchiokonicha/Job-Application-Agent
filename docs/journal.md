@@ -408,3 +408,15 @@ from *counting* (fast, code) is what makes that possible.
 Lesson: **a human review of the top of the list is the cheapest eval there is.** Two jobs
 checked, two rule bugs found. The errors that matter most sit at the top, because those are
 the jobs you'd apply to.
+
+**Recount results:** 4 scores changed. Two correct: both "Abingdon" jobs were in the US (one
+"USA based", one "New York City, NY"); Reed lists them under the recruiter's UK office.
+#46 (R/Shiny) 97 → 55, correct. One wrong: a Senior ML Engineer job capped at 55 because
+"Machine Learning" counted as a missing title skill. The model had cited a CV section
+heading as proof, the verifier rightly rejected it, and the new rule then turned one bad
+quote into a cap. Fix: the title rule ignores the role's own words (machine learning, AI,
+engineer…) and only fires on specific skills (R, Shiny, TypeScript).
+
+Lesson: **a rule that amplifies a judgement also amplifies its errors.** Caps and
+dealbreakers should rest on facts code can check, or on specific skills where a "missing"
+is likely real.
