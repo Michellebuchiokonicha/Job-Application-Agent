@@ -467,3 +467,32 @@ Lesson: **"no silent failures" includes hangs.** A call that never returns is th
 failure there is: no error, no log, just a frozen progress bar. Every call to something
 you don't control (a model, an API) needs a time limit, and an output limit if it
 generates.
+
+### Rescoring after a CV rewrite: a second look for proof (v7)
+
+I rewrote both CVs: cleaner, a new "Software Engineering" skills row, a broader profile.
+For readers it's better. The rescore said otherwise for some jobs: an ML Engineer role
+fell 73 → 32 and an AI Engineer role 71 → 55, with "Python engineering experience" marked
+*not proven*.
+
+The cause was in the scorer, not the CV. With more summary lines on the page, the first
+pass started citing them as proof: "Python, SQL, TypeScript, …". The verifier correctly
+said a skills list doesn't show anything. But nothing then looked for the bullet that
+*does* show it ("async Python FastAPI model services in Docker"), so a skill I use every
+day was scored as missing.
+
+Fix, v7: a **second look**. For each claim the verifier rejects, one extra call asks for a
+line that proves it, and that call only sees the CV from the experience heading down. The
+profile and skills list aren't in it, so the model can't cite them again. Code then checks
+the new line is really in that part of the CV and isn't the rejected one, and the verifier
+judges it with the same rules as everything else. If any of this fails, the rejection
+stands: it's a bonus step, never a way to break scoring.
+
+Two lessons:
+
+- **A score that moves 40 points when you reword your CV is measuring the wording.** One
+  run is a noisy measurement; the review decisions are what tell me whether the scorer is
+  right.
+- **Every skill in a skills list needs a bullet that shows it.** That's what the scorer
+  needed, and it's what a human reader needs too. Two CV edits followed: name the stack I
+  built on Velarius, and say "Python" in a job bullet.

@@ -1,6 +1,7 @@
 """Fit scoring: CV choice, the scorer's guards, and the score/show commands. Made-up data."""
 
 import json
+import re
 from dataclasses import asdict
 from datetime import date
 
@@ -16,6 +17,7 @@ from jobagent.match.score import (
     FitScorer,
     build_prompt,
     cv_supports,
+    evidence_section,
     experience_years,
     is_optional,
     quote_in,
@@ -58,23 +60,45 @@ def assessment(**overrides):
 
 
 class FakeChat:
-    """Plays the model. First-pass calls get `replies` in turn. Second-pass (verifier)
-    calls approve every claim, except the numbers in `reject`."""
+    """Plays the model. First-pass calls get `replies` in turn. The first verifier call
+    approves every claim except the numbers in `reject`. A second look offers the lines in
+    `evidence` ({requirement: CV line}); later verifier calls approve unless the CV line
+    contains a phrase in `reject_lines`."""
 
-    def __init__(self, *replies, reject=()):
+    def __init__(self, *replies, reject=(), evidence=None, reject_lines=()):
         self.replies = list(replies)
         self.reject = set(reject)
+        self.evidence = evidence or {}
+        self.reject_lines = reject_lines
         self.calls = []
+        self.verifications = 0
 
     def chat(self, **kwargs):
         self.calls.append(kwargs)
-        if kwargs["format"].get("title") == "Verification":
-            claims = kwargs["messages"][1]["content"].count("Requirement:")
+        title = kwargs["format"].get("title")
+        content = kwargs["messages"][1]["content"]
+        if title == "Verification":
+            self.verifications += 1
+            lines = re.findall(r"CV line: (.*)", content)
             judgements = [
-                {"number": n, "directly_shows": n not in self.reject}
-                for n in range(1, claims + 1)
+                {
+                    "number": n,
+                    "directly_shows": (
+                        n not in self.reject
+                        if self.verifications == 1
+                        else not any(p in line for p in self.reject_lines)
+                    ),
+                }
+                for n, line in enumerate(lines, start=1)
             ]
             return {"message": {"content": json.dumps({"judgements": judgements})}}
+        if title == "EvidenceSearch":
+            asked = re.findall(r"^(\d+)\. Requirement: (.*)$", content, re.MULTILINE)
+            items = [
+                {"number": int(n), "cv_quote": self.evidence.get(name, "")}
+                for n, name in asked
+            ]
+            return {"message": {"content": json.dumps({"items": items})}}
         reply = self.replies.pop(0)
         content = reply if isinstance(reply, str) else json.dumps(reply)
         return {"message": {"content": content}}
@@ -350,6 +374,101 @@ def test_verifier_rejects_a_real_quote_that_proves_nothing():
     assert fit.score == 40  # 1 of 2 essentials (40) + 0 of 1 nice-to-have
 
 
+# --- Second look: rejected claims get one more search, in experience and projects ----
+
+SECTIONED_CV = """\
+PROFILE
+AI engineer who ships LLM products.
+TECHNICAL SKILLS
+Python, FastAPI, Docker
+PROFESSIONAL EXPERIENCE
+Served models through async Python FastAPI services in Docker.
+Architected RAG pipelines using MongoDB Vector Search.
+"""
+SKILLS_LINE = "Python, FastAPI, Docker"
+BULLET = "Served models through async Python FastAPI services in Docker."
+
+
+def sectioned_assessment():
+    # The first pass cites the skills list for Python: real, but it proves nothing.
+    return assessment(
+        requirements=[
+            req("Python", "strong Python", True, SKILLS_LINE),
+            req(
+                "RAG",
+                "experience with RAG pipelines",
+                True,
+                "Architected RAG pipelines",
+            ),
+            req("Kubernetes", "Kubernetes is a bonus", False, essential=False),
+        ]
+    )
+
+
+def second_look(**fake):
+    chat = FakeChat(sectioned_assessment(), reject={1}, **fake)
+    fit = FitScorer(chat, "m").score("ML Engineer", "Acme", AD, SECTIONED_CV)
+    return fit, chat
+
+
+def test_evidence_section_leaves_out_profile_and_skills():
+    section = evidence_section(SECTIONED_CV)
+    assert section.startswith("PROFESSIONAL EXPERIENCE")
+    assert SKILLS_LINE not in section and BULLET in section
+
+
+def test_evidence_section_needs_a_real_heading():
+    cv = "Profile: engineer with five years of\nexperience\nSkills: Python"
+    assert evidence_section(cv) == cv  # a wrapped sentence isn't a heading: whole CV
+    assert evidence_section("Skills\nWork Experience\nBuilt X").startswith("Work")
+
+
+def test_second_look_finds_the_bullet_that_proves_it():
+    fit, _ = second_look(evidence={"Python": BULLET})
+    python = fit.requirements[0]
+    assert python.met and python.second_look and not python.not_proven
+    assert python.cv_quote == BULLET
+    assert fit.not_proven == 0 and fit.score == 80
+
+
+def test_second_look_cannot_use_the_skills_list():
+    # Offering the skills line again: code refuses it (not in experience), no new judging.
+    fit, chat = second_look(evidence={"Python": SKILLS_LINE})
+    assert not fit.requirements[0].met and fit.not_proven == 1
+    assert chat.verifications == 1
+
+
+def test_second_look_cannot_invent_a_line():
+    fit, _ = second_look(evidence={"Python": "Led Python platform team at Google"})
+    assert not fit.requirements[0].met and fit.not_proven == 1
+
+
+def test_second_look_line_is_judged_like_any_other():
+    fit, chat = second_look(evidence={"Python": BULLET}, reject_lines=("Docker",))
+    assert not fit.requirements[0].met and fit.requirements[0].not_proven
+    assert chat.verifications == 2
+
+
+def test_no_second_look_when_nothing_was_rejected():
+    chat = FakeChat(sectioned_assessment())
+    FitScorer(chat, "m").score("t", "c", AD, SECTIONED_CV)
+    titles = [c["format"].get("title") for c in chat.calls]
+    assert "EvidenceSearch" not in titles
+
+
+def test_a_failed_second_look_leaves_the_rejection_standing():
+    class LoopingSecondLook(FakeChat):
+        def chat(self, **kwargs):
+            if kwargs["format"].get("title") == "EvidenceSearch":
+                return {"message": {"content": ""}, "done_reason": "length"}
+            return super().chat(**kwargs)
+
+    chat = LoopingSecondLook(sectioned_assessment(), reject={1})
+    fit = FitScorer(chat, "m").score("t", "c", AD, SECTIONED_CV)
+    assert not fit.requirements[0].met and fit.not_proven == 1
+    assert not fit.verifier_failed  # the main check worked; only the bonus step didn't
+
+
 def test_summary_agrees_with_the_final_score():
     # job 16 said "meets all essential requirements" next to six missing ones
     fit = score_with(assessment(), reject={2})
@@ -388,7 +507,7 @@ def test_show_says_why_a_claim_was_rejected(tmp_path, monkeypatch):
     )
     conn.commit()
     out = CliRunner().invoke(cli.app, ["jobs", "show", "1"]).output
-    assert "doesn't prove it" in out and "Architected RAG pipelines" in out
+    assert "doesn't show this" in out and "Architected RAG pipelines" in out
 
 
 def test_verifier_failure_is_reported_not_hidden():

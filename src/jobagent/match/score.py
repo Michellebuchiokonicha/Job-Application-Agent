@@ -13,7 +13,7 @@ Small models are better at narrow yes/no judgements than at one holistic number.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 import httpx
@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, ValidationError
 from jobagent.inbox.classify import ChatClient
 from jobagent.match.filters import based_abroad
 
-PROMPT_VERSION = "v6"  # v6: verifier sees the ad; fair on general requirements
+PROMPT_VERSION = "v7"  # v7: second look for proof in experience and projects
 MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
@@ -85,6 +85,26 @@ clear, concrete example in the CV line is enough.
 Answer for every number."""
 
 
+# Second look, for claims the verifier rejected. The first pass often cites a skills-list
+# line ("Python, SQL, TypeScript…"), which the verifier rightly rejects; but the proof was
+# in a bullet it never looked at. This call only sees experience and projects.
+EVIDENCE_PROMPT = """\
+Each numbered requirement below was claimed for a candidate, but the CV line given does \
+not prove it. Look through the candidate's experience and projects for ONE line that \
+directly shows hands-on work with that requirement. Copy that line exactly as cv_quote. \
+Do not reuse the rejected line. If no line shows it, cv_quote is "". Answer for every \
+number."""
+
+
+class Evidence(BaseModel):
+    number: int
+    cv_quote: str = Field(max_length=400)
+
+
+class EvidenceSearch(BaseModel):
+    items: list[Evidence]
+
+
 class Judgement(BaseModel):
     number: int
     directly_shows: bool
@@ -114,6 +134,7 @@ class CheckedRequirement:
     )
     job_quote: str = ""  # the ad's wording, so the verifier knows what was asked
     ad_line: int | None = None  # which line of the ad it came from (for weighting)
+    second_look: bool = False  # proof found on a second look, in experience or projects
 
 
 @dataclass
@@ -180,6 +201,23 @@ def cv_supports(quote: str, cv: str, threshold: float = 0.85) -> bool:
         return False
     cv_words = set(_WORD.findall(cv.lower()))
     return sum(w in cv_words for w in words) / len(words) >= threshold
+
+
+# A heading line: "PROFESSIONAL EXPERIENCE", "Work Experience", "EXPERIENCE". Only short,
+# capitalised lines, so a wrapped sentence ending "…years of experience" doesn't count.
+_EXPERIENCE_HEADING = re.compile(
+    r"^[ \t]*(?:[A-Z][A-Za-z&]* ){0,3}(?:EXPERIENCE|Experience)[ \t]*$", re.MULTILINE
+)
+
+
+def evidence_section(cv: str) -> str:
+    """The CV from its experience heading on: jobs, projects, education.
+
+    Leaves out the profile and skills list, which name skills without showing them. If
+    there's no such heading, the whole CV (better a weaker second look than none).
+    """
+    m = _EXPERIENCE_HEADING.search(cv)
+    return cv[m.start() :] if m else cv
 
 
 _OPTIONAL = re.compile(
@@ -526,17 +564,18 @@ class FitScorer:
             except ValidationError:
                 continue
             fit = check(assessment, description, cv, title)
-            self._verify(fit)
+            self._verify(fit, cv)
             finalise(fit, title)  # again: the verifier may have changed what's met
             return fit
         self.last_failure = f"invalid answer {1 + self.retries} times"
         return None  # never valid: the caller records a failure, never a fake score
 
-    def _verify(self, fit: Fit) -> None:
-        """Ask, claim by claim, whether each CV quote proves its requirement."""
-        claims = [r for r in fit.requirements if r.met]
-        if not claims:
-            return
+    def _judge(self, claims: list[CheckedRequirement]) -> set[int] | None:
+        """Ask, claim by claim, whether each CV quote proves its requirement.
+
+        Returns the numbers (1-based) of the claims it rejects, or None if the model gave
+        no usable answer.
+        """
         pairs = "\n\n".join(
             f"{i}. Requirement: {r.requirement}\n   Ad says: {r.job_quote}\n"
             f"   CV line: {r.cv_quote}"
@@ -550,15 +589,82 @@ class FitScorer:
             try:
                 content = self._chat(messages, Verification.model_json_schema())
             except ModelStuck:
-                break  # flagged below: claims kept but marked unchecked
+                return None
             try:
                 verdicts = Verification.model_validate_json(content)
             except ValidationError:
                 continue
-            rejected = {j.number for j in verdicts.judgements if not j.directly_shows}
-            for i, r in enumerate(claims, start=1):
-                if i in rejected:
-                    r.met, r.not_proven = False, True
-            fit.not_proven = len(rejected & set(range(1, len(claims) + 1)))
+            numbers = set(range(1, len(claims) + 1))
+            return {
+                j.number for j in verdicts.judgements if not j.directly_shows
+            } & numbers
+        return None
+
+    def _verify(self, fit: Fit, cv: str) -> None:
+        """Check every "met" claim; give rejected ones a second look for better proof."""
+        claims = [r for r in fit.requirements if r.met]
+        if not claims:
             return
-        fit.verifier_failed = True  # reported, so it's never silently trusted
+        rejected = self._judge(claims)
+        if rejected is None:
+            fit.verifier_failed = True  # reported, so it's never silently trusted
+            return
+        doubted = [r for i, r in enumerate(claims, start=1) if i in rejected]
+        for r in doubted:
+            r.met, r.not_proven = False, True
+        self._second_look(doubted, cv)
+        fit.not_proven = sum(r.not_proven for r in fit.requirements)
+
+    def _second_look(self, doubted: list[CheckedRequirement], cv: str) -> None:
+        """Look for a better line in experience and projects, then judge it the same way.
+
+        A bonus step: if anything fails, the rejections simply stand.
+        """
+        if not doubted:
+            return
+        evidence = evidence_section(cv)
+        listing = "\n\n".join(
+            f"{i}. Requirement: {r.requirement}\n   Ad says: {r.job_quote}\n"
+            f"   Rejected CV line: {r.cv_quote}"
+            for i, r in enumerate(doubted, start=1)
+        )
+        messages = [
+            {"role": "system", "content": EVIDENCE_PROMPT},
+            {
+                "role": "user",
+                "content": f"{listing}\n\nCANDIDATE EXPERIENCE AND PROJECTS:\n{evidence}",
+            },
+        ]
+        try:
+            content = self._chat(messages, EvidenceSearch.model_json_schema())
+            found = EvidenceSearch.model_validate_json(content)
+        except (ModelStuck, ValidationError):
+            return
+        candidates: dict[int, CheckedRequirement] = {}  # index in doubted -> new claim
+        for item in found.items:
+            quote = item.cv_quote.strip()
+            if not 1 <= item.number <= len(doubted) or item.number - 1 in candidates:
+                continue
+            old = doubted[item.number - 1]
+            # Code checks the line really is in experience/projects, and is a new one.
+            if (
+                quote
+                and cv_supports(quote, evidence)
+                and not quote_in(quote, old.cv_quote)
+            ):
+                candidates[item.number - 1] = replace(old, cv_quote=quote)
+        if not candidates:
+            return
+        order = list(candidates)
+        rejected = self._judge([candidates[k] for k in order])
+        if rejected is None:
+            return
+        for n, k in enumerate(order, start=1):
+            if n not in rejected:
+                r = doubted[k]
+                r.cv_quote, r.met, r.not_proven, r.second_look = (
+                    candidates[k].cv_quote,
+                    True,
+                    False,
+                    True,
+                )

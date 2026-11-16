@@ -755,7 +755,7 @@ def jobs_score(
 
     verdicts: Counter = Counter()
     failures: list[str] = []  # "#ID title: reason", listed at the end
-    snippet_only = unverified_job = unverified_cv = not_proven = 0
+    snippet_only = unverified_job = unverified_cv = not_proven = second_look = 0
     verifier_failed = 0
     with Progress(console=console) as progress:
         task = progress.add_task("Scoring", total=len(rows))
@@ -798,6 +798,7 @@ def jobs_score(
                 unverified_job += fit.unverified_job_quotes
                 unverified_cv += fit.unverified_cv_quotes
                 not_proven += fit.not_proven
+                second_look += sum(r.second_look for r in fit.requirements)
                 verifier_failed += fit.verifier_failed
             progress.advance(task)
 
@@ -819,7 +820,8 @@ def jobs_score(
     console.print(
         f"[dim]  Requirement quotes not found in the ad: {unverified_job} · "
         f"'met' claims rejected (CV quote not in your CV): {unverified_cv} · "
-        f"(CV line doesn't prove it): {not_proven}[/]"
+        f"(CV line doesn't prove it): {not_proven} · "
+        f"proof found on a second look: {second_look}[/]"
     )
     if verifier_failed:
         console.print(
@@ -987,7 +989,8 @@ def _print_job(r) -> None:
     missing = [q for q in reqs if not q["met"]]
     console.print(f"[green bold]You meet ({len(met)})[/]")
     for q in met:
-        console.print(Text(f"  ✓ {q['requirement']}"))
+        found = "  (found on a second look)" if q.get("second_look") else ""
+        console.print(Text(f"  ✓ {q['requirement']}{found}"))
         console.print(Text(f'      your CV: "{q["cv_quote"]}"', style="dim"))
     console.print(f"[yellow bold]Missing ({len(missing)})[/]")
     for q in missing:
@@ -996,7 +999,7 @@ def _print_job(r) -> None:
         if q["claimed_but_unverified"]:
             note = "  [claimed, but no matching line in your CV]"
         elif q.get("not_proven"):  # .get: scores saved before v4 lack the field
-            note = "  [checker: this CV line doesn't prove it]"
+            note = "  [checker: the CV line it cited doesn't show this]"
         console.print(Text(f"  · {q['requirement']}{tag}{note}"))
         if q.get("not_proven"):
             console.print(Text(f'      your CV: "{q["cv_quote"]}"', style="dim"))
