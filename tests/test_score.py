@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from datetime import date
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -11,6 +12,7 @@ from jobagent import cli
 from jobagent.match import cv as cv_module
 from jobagent.match.cv import cv_for
 from jobagent.match.score import (
+    NUM_PREDICT,
     FitScorer,
     build_prompt,
     cv_supports,
@@ -171,6 +173,72 @@ def test_retries_then_gives_up_without_inventing_a_score():
     assert (
         FitScorer(FakeChat("bad", "{}"), "m", retries=1).score("t", "c", AD, CV) is None
     )
+
+
+def test_failure_reason_for_invalid_answers():
+    scorer = FitScorer(FakeChat("bad", "{}"), "m", retries=1)
+    assert scorer.score("t", "c", AD, CV) is None
+    assert scorer.last_failure == "invalid answer 2 times"
+
+
+def test_every_call_caps_the_answer_length():
+    chat = FakeChat(assessment())
+    FitScorer(chat, "m").score("t", "c", AD, CV)
+    assert all(c["options"]["num_predict"] == NUM_PREDICT for c in chat.calls)
+    assert len(chat.calls) == 2  # first pass + verifier
+
+
+class LoopingChat:
+    """A model stuck in a loop: Ollama stops it at the output cap."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def chat(self, **kwargs):
+        self.calls += 1
+        return {"message": {"content": '{"requirements": [  '}, "done_reason": "length"}
+
+
+def test_a_looping_model_is_skipped_not_retried():
+    chat = LoopingChat()
+    scorer = FitScorer(chat, "m", retries=1)
+    assert scorer.score("t", "c", AD, CV) is None
+    assert "cut off" in scorer.last_failure
+    assert chat.calls == 1  # temperature 0 would loop the same way again
+
+
+def test_a_silent_model_times_out():
+    class SilentChat:
+        def chat(self, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    scorer = FitScorer(SilentChat(), "m")
+    assert scorer.score("t", "c", AD, CV) is None
+    assert "no answer within" in scorer.last_failure
+
+
+def test_a_looping_verifier_flags_the_job_instead_of_hanging():
+    class LoopingVerifier(FakeChat):
+        def chat(self, **kwargs):
+            if kwargs["format"].get("title") == "Verification":
+                return {"message": {"content": ""}, "done_reason": "length"}
+            return super().chat(**kwargs)
+
+    fit = FitScorer(LoopingVerifier(assessment()), "m").score("t", "c", AD, CV)
+    assert fit.verifier_failed and fit.score == 80
+
+
+def test_score_names_the_jobs_it_could_not_score(scored_env, monkeypatch):
+    class StuckScorer:
+        last_failure = "answer cut off at 4096 tokens (model looping)"
+
+        def score(self, *args):
+            return None
+
+    monkeypatch.setattr(cli, "_make_scorer", lambda s: StuckScorer())
+    out = CliRunner().invoke(cli.app, ["jobs", "score"]).output
+    assert "Scored 0 of 2" in out and "Not scored this run (2)" in out
+    assert "ML Engineer: answer cut off" in out
 
 
 def test_html_to_text_keeps_list_items_apart():
@@ -427,3 +495,41 @@ def test_role_words_in_the_title_are_not_a_skill_gap():
     reqs = [missing("Machine Learning"), missing("TypeScript")]
     title = "Senior Machine Learning Engineer (TypeScript)"
     assert title_gaps(reqs, title) == ["TypeScript"]
+
+
+# --- Review ------------------------------------------------------------------------
+
+
+def test_review_saves_decisions_and_hides_rejected(scored_env):
+    CliRunner().invoke(cli.app, ["jobs", "score"])
+    # best first: AI Engineer (80) then ML Engineer (0). Accept the first, reject the second
+    result = CliRunner().invoke(
+        cli.app, ["jobs", "review"], input="a\ngreat fit\nr\nnot my field\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Accepted 1 · rejected 1 · skipped 0." in result.output
+
+    listing = CliRunner().invoke(cli.app, ["jobs", "list"]).output
+    assert "2 ✓" in listing and "ML" not in listing  # rejected job hidden
+    assert "Nothing to review" in CliRunner().invoke(cli.app, ["jobs", "review"]).output
+
+    shortlist = CliRunner().invoke(cli.app, ["jobs", "list", "--accepted"]).output
+    assert "Beta" in shortlist and "Acme" not in shortlist
+
+
+def test_review_skip_and_quit_save_nothing(scored_env):
+    CliRunner().invoke(cli.app, ["jobs", "score"])
+    out = CliRunner().invoke(cli.app, ["jobs", "review"], input="s\nq\n").output
+    assert "Accepted 0 · rejected 0 · skipped 1." in out
+    again = CliRunner().invoke(cli.app, ["jobs", "review"]).output  # EOF ends it
+    assert "2 job(s) to review" in again
+
+
+def test_decisions_survive_clearing_jobs(scored_env):
+    CliRunner().invoke(cli.app, ["jobs", "score"])
+    CliRunner().invoke(cli.app, ["jobs", "review"], input="r\n\nq\n")
+    CliRunner().invoke(cli.app, ["jobs", "clear", "--yes"])
+    CliRunner().invoke(cli.app, ["jobs", "fetch"])  # same jobs come back
+    CliRunner().invoke(cli.app, ["jobs", "score"])
+    out = CliRunner().invoke(cli.app, ["jobs", "review"], input="q\n").output
+    assert "1 job(s) to review" in out  # the rejected one stays decided

@@ -420,3 +420,50 @@ engineer…) and only fires on specific skills (R, Shiny, TypeScript).
 Lesson: **a rule that amplifies a judgement also amplifies its errors.** Caps and
 dealbreakers should rest on facts code can check, or on specific skills where a "missing"
 is likely real.
+
+### Review queue: `jobs review`
+
+The first step where a human decides. Best first, one job at a time with the full fit
+assessment: **a**ccept, **r**eject, **s**kip, **o**pen the ad in the browser, **q**uit.
+An optional reason for each decision.
+
+Design choices:
+
+- Decisions live in their **own table, keyed by Reed's job ID**, with a copy of title,
+  company and the score at the time. Rescoring and `jobs clear` would otherwise wipe them,
+  and these are the matcher's eval labels: the one dataset that has to outlast everything.
+- Each decision is **saved immediately**, so quitting halfway loses nothing.
+- `jobs list` hides rejected jobs and marks accepted ones ✓. `jobs list --accepted` is the
+  shortlist.
+
+With decisions stored next to the score, the matcher's eval becomes a query: of the jobs
+scored 80+, how many did I accept? Of the ones I accepted, how many did the scorer rank in
+the top 20?
+
+### A five-hour hang: every model call needs a limit
+
+After the CV update I started a full rescore. Three jobs scored in about 20 seconds each,
+then the progress bar stopped. Five hours later nothing more had been saved, and Ollama's
+model process was still running at full CPU on job four.
+
+The cause: our calls to Ollama had **no time limit and no cap on answer length**. The
+Ollama Python client defaults to `timeout=None` (wait forever), and without `num_predict`
+the model can keep generating indefinitely. A small model asked for structured output
+sometimes falls into a loop (repeated text or endless whitespace), and nothing stopped it.
+It wasn't the laptop: a faster machine would loop the same way, just faster.
+
+Fixes:
+
+- **Output cap**: `num_predict = 4096`. A real assessment is well under 2k tokens, so
+  hitting the cap means a loop. Ollama then returns `done_reason: "length"`.
+- **Time limit**: 300 seconds per call on the client.
+- **No retry after a loop or timeout.** Invalid JSON gets one retry, but at temperature 0
+  the same prompt loops the same way again, so retrying would only double the wait.
+- **Named failures**: the run summary lists each job it couldn't score with the reason
+  ("answer cut off at 4096 tokens"), and keeps any old score. If the verifier loops, the
+  job is kept but flagged as not double-checked, as before.
+
+Lesson: **"no silent failures" includes hangs.** A call that never returns is the quietest
+failure there is: no error, no log, just a frozen progress bar. Every call to something
+you don't control (a model, an API) needs a time limit, and an output limit if it
+generates.

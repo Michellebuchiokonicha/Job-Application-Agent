@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
+import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from jobagent.inbox.classify import ChatClient
@@ -26,6 +27,15 @@ MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
 NUM_CTX = 16384
+# Guards against a looping model (it once ran 5 hours on one job). A real answer is well
+# under 2k tokens, so hitting the output cap means a loop; the timeout catches the rest.
+NUM_PREDICT = 4096
+MODEL_TIMEOUT = 300  # seconds per call
+
+
+class ModelStuck(Exception):
+    """The model looped or went silent: skip this job, say why, never wait forever."""
+
 
 SYSTEM_PROMPT = """\
 You are a strict, careful recruiter. Check one job ad against the candidate's CV.
@@ -474,30 +484,52 @@ class FitScorer:
         self.client = client
         self.model = model
         self.retries = retries
+        self.last_failure = ""  # why score() last returned None (for the summary)
+
+    def _chat(self, messages: list[dict], schema: dict) -> str:
+        """One model call, returning the reply text. Raises ModelStuck on a loop or timeout.
+
+        No retry for those: at temperature 0 the same prompt loops the same way again.
+        """
+        try:
+            response = self.client.chat(
+                model=self.model,
+                messages=messages,
+                format=schema,
+                options={
+                    "temperature": 0,
+                    "num_ctx": NUM_CTX,
+                    "num_predict": NUM_PREDICT,
+                },
+                think=False,
+            )
+        except httpx.TimeoutException:
+            raise ModelStuck(f"no answer within {MODEL_TIMEOUT}s") from None
+        if response.get("done_reason") == "length":
+            raise ModelStuck(f"answer cut off at {NUM_PREDICT} tokens (model looping)")
+        return response["message"]["content"]
 
     def score(self, title: str, company: str, description: str, cv: str) -> Fit | None:
+        self.last_failure = ""
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(title, company, description, cv)},
         ]
         for _ in range(1 + self.retries):
-            response = self.client.chat(
-                model=self.model,
-                messages=messages,
-                format=FitAssessment.model_json_schema(),
-                options={"temperature": 0, "num_ctx": NUM_CTX},
-                think=False,
-            )
             try:
-                assessment = FitAssessment.model_validate_json(
-                    response["message"]["content"]
-                )
+                content = self._chat(messages, FitAssessment.model_json_schema())
+            except ModelStuck as stuck:
+                self.last_failure = str(stuck)
+                return None
+            try:
+                assessment = FitAssessment.model_validate_json(content)
             except ValidationError:
                 continue
             fit = check(assessment, description, cv, title)
             self._verify(fit)
             finalise(fit, title)  # again: the verifier may have changed what's met
             return fit
+        self.last_failure = f"invalid answer {1 + self.retries} times"
         return None  # never valid: the caller records a failure, never a fake score
 
     def _verify(self, fit: Fit) -> None:
@@ -510,21 +542,17 @@ class FitScorer:
             f"   CV line: {r.cv_quote}"
             for i, r in enumerate(claims, start=1)
         )
+        messages = [
+            {"role": "system", "content": VERIFY_PROMPT},
+            {"role": "user", "content": pairs},
+        ]
         for _ in range(1 + self.retries):
-            response = self.client.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": VERIFY_PROMPT},
-                    {"role": "user", "content": pairs},
-                ],
-                format=Verification.model_json_schema(),
-                options={"temperature": 0, "num_ctx": NUM_CTX},
-                think=False,
-            )
             try:
-                verdicts = Verification.model_validate_json(
-                    response["message"]["content"]
-                )
+                content = self._chat(messages, Verification.model_json_schema())
+            except ModelStuck:
+                break  # flagged below: claims kept but marked unchecked
+            try:
+                verdicts = Verification.model_validate_json(content)
             except ValidationError:
                 continue
             rejected = {j.number for j in verdicts.judgements if not j.directly_shows}

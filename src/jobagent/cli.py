@@ -655,21 +655,32 @@ def jobs_fetch(
 @jobs_app.command("list")
 def jobs_list(
     limit: Annotated[int, typer.Option(help="How many to show.")] = 30,
+    accepted: Annotated[
+        bool, typer.Option("--accepted", help="Only jobs you accepted in review.")
+    ] = False,
+    rejected: Annotated[
+        bool, typer.Option("--rejected", help="Include jobs you rejected.")
+    ] = False,
 ) -> None:
-    """Stored jobs, best region first, then newest."""
+    """Stored jobs, best fit first. Rejected jobs are hidden; ✓ marks accepted ones."""
     from jobagent.core.store import list_jobs
     from jobagent.match.filters import Region
 
     conn = _open_db(Settings.from_env())
-    rows = list_jobs(conn, limit)
+    rows = list_jobs(
+        conn, limit=10_000 if accepted else limit, include_rejected=rejected
+    )
+    if accepted:
+        rows = [r for r in rows if r["decision"] == "accepted"][:limit]
     if not rows:
         console.print("No jobs yet. Run: uv run jobagent jobs fetch")
         return
     table = Table("ID", "Fit", "Title", "Company", "Where", "Posted", "Salary")
     for r in rows:
         posted = r["posted_at"]
+        mark = {"accepted": " ✓", "rejected": " ✗"}.get(r["decision"], "")
         table.add_row(
-            str(r["id"]),
+            str(r["id"]) + mark,
             _fit_cell(r["score"]),
             Text(r["title"]),  # Text(): job ads are untrusted, never parsed as markup
             Text(r["company"]),
@@ -705,9 +716,10 @@ def _make_scorer(settings: Settings):
     """The local model's fit scorer. A separate function so tests can swap it."""
     import ollama
 
-    from jobagent.match.score import FitScorer
+    from jobagent.match.score import MODEL_TIMEOUT, FitScorer
 
-    return FitScorer(ollama.Client(host=settings.ollama_host), settings.inbox_model)
+    client = ollama.Client(host=settings.ollama_host, timeout=MODEL_TIMEOUT)
+    return FitScorer(client, settings.inbox_model)
 
 
 @jobs_app.command("score")
@@ -742,7 +754,8 @@ def jobs_score(
     )
 
     verdicts: Counter = Counter()
-    failed = snippet_only = unverified_job = unverified_cv = not_proven = 0
+    failures: list[str] = []  # "#ID title: reason", listed at the end
+    snippet_only = unverified_job = unverified_cv = not_proven = 0
     verifier_failed = 0
     with Progress(console=console) as progress:
         task = progress.add_task("Scoring", total=len(rows))
@@ -766,8 +779,9 @@ def jobs_score(
                     "Start it with `ollama serve`."
                 )
                 raise typer.Exit(1) from None
-            if fit is None:
-                failed += 1  # counted and reported, never a made-up score
+            if fit is None:  # named and reported, never a made-up score
+                reason = getattr(scorer, "last_failure", "") or "no valid answer"
+                failures.append(f"#{row['id']} {row['title']}: {reason}")
             else:
                 save_score(
                     conn,
@@ -792,8 +806,12 @@ def jobs_score(
     for verdict in ("strong", "worth applying", "stretch", "poor fit"):
         if verdicts[verdict]:
             console.print(f"  {verdict}: {verdicts[verdict]}")
-    if failed:
-        console.print(f"[yellow]  Model gave no valid answer for {failed}.[/]")
+    if failures:
+        console.print(
+            f"[yellow]  Not scored this run ({len(failures)}); any old score is kept:[/]"
+        )
+        for line in failures:  # markup off: job titles can contain [brackets]
+            console.print(f"    {line}", markup=False, style="yellow")
     if snippet_only:
         console.print(
             f"[yellow]  Scored on the snippet only (full ad unavailable): {snippet_only}[/]"
@@ -856,12 +874,69 @@ def jobs_recount() -> None:
         )
 
 
+@jobs_app.command("review")
+def jobs_review(
+    min_score: Annotated[
+        int, typer.Option(help="Only jobs scoring at least this.")
+    ] = 0,
+    limit: Annotated[int | None, typer.Option(help="Stop after this many.")] = None,
+) -> None:
+    """Go through scored jobs, best first: accept, reject or skip each one.
+
+    Every decision is saved. Accepted jobs are your shortlist to apply to; all decisions
+    become labels for checking the scorer (do high scores match what you accept?).
+    """
+    from jobagent.core.store import jobs_to_review, save_decision
+
+    conn = _open_db(Settings.from_env())
+    rows = jobs_to_review(conn, min_score=min_score, limit=limit)
+    if not rows:
+        console.print("Nothing to review. Score jobs first: uv run jobagent jobs score")
+        return
+    console.print(
+        f"{len(rows)} job(s) to review, best first.\n"
+        "[bold]a[/] accept · [bold]r[/] reject · [bold]s[/] skip (decide later) · "
+        "[bold]o[/] open the ad in your browser · [bold]q[/] quit (progress is saved)"
+    )
+    done: Counter = Counter()
+    for i, r in enumerate(rows, start=1):
+        console.rule(f"{i} of {len(rows)}")
+        _print_job(r)
+        while True:
+            choice = typer.prompt("Decision [a/r/s/o/q]", default="s").strip().lower()
+            if choice == "o":
+                typer.launch(r["url"])  # then ask again
+            elif choice in {"a", "r", "s", "q"}:
+                break
+            else:
+                console.print("Type a, r, s, o or q.")
+        if choice == "q":
+            break
+        if choice == "s":
+            done["skipped"] += 1
+            continue
+        decision = "accepted" if choice == "a" else "rejected"
+        reason = typer.prompt(
+            "Why? (optional, Enter to skip)", default="", show_default=False
+        )
+        save_decision(
+            conn, r, decision, reason
+        )  # saved at once: quitting loses nothing
+        done[decision] += 1
+
+    console.print(
+        f"Accepted {done['accepted']} · rejected {done['rejected']} · "
+        f"skipped {done['skipped']}."
+    )
+    if done["accepted"]:
+        console.print("[dim]Your shortlist: uv run jobagent jobs list --accepted[/]")
+
+
 @jobs_app.command("show")
 def jobs_show(
     job_id: Annotated[int, typer.Argument(help="Job ID from jobs list.")],
 ) -> None:
     """Everything about one job: the fit assessment and a link to apply."""
-    import json
 
     from jobagent.core.store import get_job
 
@@ -871,6 +946,12 @@ def jobs_show(
     except KeyError:
         console.print(f"No job with ID {job_id}.")
         raise typer.Exit(1) from None
+    _print_job(r)
+
+
+def _print_job(r) -> None:
+    """The full fit assessment for one job row (from get_job or jobs_to_review)."""
+    import json
 
     console.print(
         Text(f"{r['title']} · {r['company']} · {r['location']}", style="bold")

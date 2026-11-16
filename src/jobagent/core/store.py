@@ -142,6 +142,22 @@ CREATE TABLE IF NOT EXISTS job_scores (
     prompt_version   TEXT NOT NULL,
     scored_at        TEXT NOT NULL
 );
+
+-- Your accept/reject decisions: the labels for the matcher's eval. Keyed by the source's
+-- own job ID (not jobs.id) and holding a copy of title, company and score, so they survive
+-- rescoring and `jobs clear`.
+CREATE TABLE IF NOT EXISTS job_decisions (
+    source           TEXT NOT NULL,
+    external_id      TEXT NOT NULL,
+    decision         TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected')),
+    reason           TEXT NOT NULL DEFAULT '',
+    title            TEXT NOT NULL,
+    company          TEXT NOT NULL,
+    score            INTEGER,            -- the fit score when you decided
+    prompt_version   TEXT,
+    decided_at       TEXT NOT NULL,
+    PRIMARY KEY (source, external_id)
+);
 """
 
 
@@ -398,17 +414,80 @@ def upsert_job(conn: sqlite3.Connection, job: "Job", region: int) -> bool:
     return existed is None
 
 
-def list_jobs(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
+_DECISION_JOIN = """
+    LEFT JOIN job_decisions jd
+        ON jd.source = jobs.source AND jd.external_id = jobs.external_id
+"""
+
+
+def list_jobs(
+    conn: sqlite3.Connection, limit: int = 50, include_rejected: bool = False
+) -> list[sqlite3.Row]:
     """Best first: highest fit score (unscored last), then preferred region, then newest."""
+    where = "" if include_rejected else "WHERE jd.decision IS NOT 'rejected'"
     return conn.execute(
-        """
-        SELECT jobs.*, s.score, s.verdict FROM jobs
+        f"""
+        SELECT jobs.*, s.score, s.verdict, jd.decision FROM jobs
         LEFT JOIN job_scores s ON s.job_id = jobs.id
+        {_DECISION_JOIN}
+        {where}
         ORDER BY s.score IS NULL, s.score DESC, region, posted_at DESC, id DESC
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
+
+
+def jobs_to_review(
+    conn: sqlite3.Connection, min_score: int = 0, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """Scored jobs you haven't decided on yet, best first. Same columns as get_job."""
+    return conn.execute(
+        f"""
+        SELECT jobs.*, d.full_description, s.score, s.verdict, s.cv, s.assessment_json,
+               s.unverified, s.model, s.prompt_version
+        FROM jobs
+        JOIN job_scores s ON s.job_id = jobs.id
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        {_DECISION_JOIN}
+        WHERE jd.decision IS NULL AND s.score >= ?
+        ORDER BY s.score DESC, region, posted_at DESC
+        LIMIT ?
+        """,
+        (min_score, -1 if limit is None else limit),
+    ).fetchall()
+
+
+def save_decision(
+    conn: sqlite3.Connection, job: sqlite3.Row, decision: str, reason: str = ""
+) -> None:
+    """Record accept/reject for a job (a row from get_job or jobs_to_review)."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO job_decisions
+            (source, external_id, decision, reason, title, company, score,
+             prompt_version, decided_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job["source"],
+            job["external_id"],
+            decision,
+            reason.strip(),
+            job["title"],
+            job["company"],
+            job["score"],
+            job["prompt_version"],
+            _now(),
+        ),
+    )
+
+
+def decision_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT decision, COUNT(*) AS n FROM job_decisions GROUP BY decision"
+    ).fetchall()
+    return {r["decision"]: r["n"] for r in rows}
 
 
 def get_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row:

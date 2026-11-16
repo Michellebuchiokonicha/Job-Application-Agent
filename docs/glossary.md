@@ -178,3 +178,7 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Atomic requirement**: One skill or tool per requirement ("Terraform"), not a bundle ("CI/CD, observability and infrastructure as code"). A single yes/no about a bundle is wrong whenever the candidate has some but not all of it.
 
 **Weighting unit**: What each point of a score is attached to. Here requirements are *judged* one skill at a time (accurate yes/no) but *weighted* per line of the ad (so a bullet listing four systems doesn't count four times). Rubrics in exams and hiring work the same way: criteria are scored separately, then weighted by section.
+
+**Human-in-the-loop labels**: Labels that come for free from decisions a person makes anyway. Accepting or rejecting a job in review is something you'd do regardless; storing it turns every review into eval data for the scorer, without a separate labelling session.
+
+**Timeout and output cap**: Two limits on a call you don't control. A timeout bounds how long you wait for an answer; an output cap (`num_predict` in Ollama, `max_tokens` elsewhere) bounds how long a model can keep generating. Without them, one looping or stuck call can freeze a whole batch run with no error at all.
