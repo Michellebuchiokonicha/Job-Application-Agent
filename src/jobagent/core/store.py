@@ -4,6 +4,7 @@ Rules (states.py) decide *whether* a move is allowed. This module *performs* it:
 update the status and append to the history, atomically, in one transaction.
 """
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -156,6 +157,25 @@ CREATE TABLE IF NOT EXISTS job_decisions (
     score            INTEGER,            -- the fit score when you decided
     prompt_version   TEXT,
     decided_at       TEXT NOT NULL,
+    PRIMARY KEY (source, external_id)
+);
+
+-- Phase 5: one application pack per job: the CV, the cover letter and (once sent) the
+-- screening answers, exactly as sent. Keyed like job_decisions, so it outlives `jobs clear`.
+CREATE TABLE IF NOT EXISTS application_packs (
+    source           TEXT NOT NULL,
+    external_id      TEXT NOT NULL,
+    tier             TEXT NOT NULL CHECK (tier IN ('A', 'B')),
+    cv               TEXT NOT NULL,      -- which CV to attach (match.cv.CV_FILES key)
+    letter           TEXT NOT NULL,
+    problems_json    TEXT NOT NULL,      -- code's checks: must fix before sending
+    warnings_json    TEXT NOT NULL,      -- worth a look
+    status           TEXT NOT NULL CHECK (status IN ('prepared', 'sent', 'rejected')),
+    answers_json     TEXT,               -- the screening answers, copied when sent
+    application_id   INTEGER REFERENCES applications(id),
+    model            TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
     PRIMARY KEY (source, external_id)
 );
 """
@@ -604,3 +624,170 @@ def clear_jobs(conn: sqlite3.Connection) -> int:
     conn.execute("DELETE FROM job_scores")
     conn.execute("DELETE FROM job_details")
     return conn.execute("DELETE FROM jobs").rowcount
+
+
+# ---- Phase 5: application packs -------------------------------------------------------------
+
+_PACK_JOIN = """
+    LEFT JOIN application_packs ap
+        ON ap.source = jobs.source AND ap.external_id = jobs.external_id
+"""
+
+
+def jobs_to_prepare(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Scored jobs with no pack yet, best first, with your decision (if any)."""
+    return conn.execute(
+        f"""
+        SELECT jobs.*, d.full_description, s.score, s.cv, s.assessment_json,
+               jd.decision
+        FROM jobs
+        JOIN job_scores s ON s.job_id = jobs.id
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        {_DECISION_JOIN}
+        {_PACK_JOIN}
+        WHERE ap.source IS NULL
+        ORDER BY s.score DESC
+        """
+    ).fetchall()
+
+
+def save_pack(
+    conn: sqlite3.Connection,
+    job: sqlite3.Row,
+    *,
+    tier: str,
+    cv: str,
+    letter: str,
+    problems: list[str],
+    warnings: list[str],
+    model: str,
+) -> None:
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO application_packs
+            (source, external_id, tier, cv, letter, problems_json, warnings_json,
+             status, model, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)
+        """,
+        (
+            job["source"],
+            job["external_id"],
+            tier,
+            cv,
+            letter,
+            json.dumps(problems),
+            json.dumps(warnings),
+            model,
+            now,
+            now,
+        ),
+    )
+
+
+def packs_to_review(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Prepared packs, tier A first, best score first, with the job's details."""
+    return conn.execute(
+        f"""
+        SELECT ap.*, jobs.id AS job_id, jobs.title, jobs.company, jobs.location,
+               jobs.url, s.score, COALESCE(d.full_description, jobs.description) AS ad
+        FROM application_packs ap
+        JOIN jobs ON jobs.source = ap.source AND jobs.external_id = ap.external_id
+        LEFT JOIN job_scores s ON s.job_id = jobs.id
+        LEFT JOIN job_details d ON d.job_id = jobs.id
+        {_DECISION_JOIN}
+        WHERE ap.status = 'prepared' AND jd.decision IS NOT 'rejected'
+        ORDER BY ap.tier, s.score DESC
+        """
+    ).fetchall()
+
+
+def update_pack_letter(
+    conn: sqlite3.Connection,
+    pack: sqlite3.Row,
+    letter: str,
+    problems: list[str],
+    warnings: list[str],
+) -> None:
+    conn.execute(
+        """
+        UPDATE application_packs
+        SET letter = ?, problems_json = ?, warnings_json = ?, updated_at = ?
+        WHERE source = ? AND external_id = ?
+        """,
+        (
+            letter,
+            json.dumps(problems),
+            json.dumps(warnings),
+            _now(),
+            pack["source"],
+            pack["external_id"],
+        ),
+    )
+
+
+def reject_pack(conn: sqlite3.Connection, pack: sqlite3.Row) -> None:
+    conn.execute(
+        "UPDATE application_packs SET status = 'rejected', updated_at = ? "
+        "WHERE source = ? AND external_id = ?",
+        (_now(), pack["source"], pack["external_id"]),
+    )
+
+
+def mark_sent(
+    conn: sqlite3.Connection,
+    pack: sqlite3.Row,
+    *,
+    letter: str,
+    answers: dict[str, str],
+    cv_file: str,
+) -> int:
+    """Record a sent application: a normal applications row plus exactly what was sent.
+
+    Idempotent per job: marking the same job sent twice returns the same application.
+    """
+    app_id = create_application(
+        conn,
+        company=pack["company"],
+        role=pack["title"],
+        status=Status.SUBMITTED,
+        reason="sent after approval in `apply review`",
+        source=Source.OWN_AGENT,
+        event_id=f"apply:{pack['source']}:{pack['external_id']}",
+        location=pack["location"],
+        cv_version=cv_file,
+        job_url=pack["url"],
+        job_description=pack["ad"],
+        applied_at=_now(),
+    )
+    conn.execute(
+        """
+        UPDATE application_packs
+        SET status = 'sent', letter = ?, answers_json = ?, application_id = ?,
+            updated_at = ?
+        WHERE source = ? AND external_id = ?
+        """,
+        (
+            letter,
+            json.dumps(answers),
+            app_id,
+            _now(),
+            pack["source"],
+            pack["external_id"],
+        ),
+    )
+    return app_id
+
+
+def delete_prepared_packs(conn: sqlite3.Connection) -> int:
+    """Drop packs not yet sent, so they're drafted again. Sent ones are a record: kept."""
+    return conn.execute(
+        "DELETE FROM application_packs WHERE status = 'prepared'"
+    ).rowcount
+
+
+def pack_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM application_packs GROUP BY status"
+    ).fetchall()
+    return {r["status"]: r["n"] for r in rows}

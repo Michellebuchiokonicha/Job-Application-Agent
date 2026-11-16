@@ -184,3 +184,7 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Timeout and output cap**: Two limits on a call you don't control. A timeout bounds how long you wait for an answer; an output cap (`num_predict` in Ollama, `max_tokens` elsewhere) bounds how long a model can keep generating. Without them, one looping or stuck call can freeze a whole batch run with no error at all.
 
 **Evidence vs claim (in a CV)**: A skills list *claims* a skill; a bullet describing work done with it is *evidence*. Recruiters and checking systems both weigh evidence more, so every listed skill should appear in at least one bullet.
+
+**Default argument evaluated at definition time**: In Python, `def f(path=DEFAULT)` reads `DEFAULT` once, when the function is defined, not each time it's called. Changing `DEFAULT` later (e.g. in a test) has no effect. Use `path=None` and fill in the default inside the function. The same rule is behind the classic `def f(items=[])` bug, where one list is shared across calls.
+
+**Grounded generation**: Model output that must trace back to given source material (here, the CV and the job ad), with code checking the traceable parts (numbers, names) rather than trusting the model's promise to stick to the facts.

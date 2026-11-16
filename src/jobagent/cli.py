@@ -1019,3 +1019,285 @@ def _short_salary(low: float | None, high: float | None) -> str:
 
 if __name__ == "__main__":
     app()
+
+
+# ---- Phase 5: apply ---------------------------------------------------------------------
+
+apply_app = typer.Typer(
+    help="Prepare applications, approve them, send them.", no_args_is_help=True
+)
+app.add_typer(apply_app, name="apply")
+
+
+def _make_letter_writer(settings: Settings):
+    """The local model's cover-letter writer. A separate function so tests can swap it."""
+    import ollama
+
+    from jobagent.apply.letter import LetterWriter
+    from jobagent.match.score import MODEL_TIMEOUT
+
+    client = ollama.Client(host=settings.ollama_host, timeout=MODEL_TIMEOUT)
+    return LetterWriter(client, settings.inbox_model)
+
+
+def _load_answers_or_exit():
+    from jobagent.apply.answers import AnswersError, load_answers
+
+    try:
+        return load_answers()
+    except AnswersError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1) from None
+
+
+@apply_app.command("answers")
+def apply_answers() -> None:
+    """Show your approved screening answers (the only answers the applier will use)."""
+    from jobagent.apply.answers import QUESTIONS
+
+    answers = _load_answers_or_exit()
+    table = Table(show_lines=True)
+    table.add_column("Question")
+    table.add_column("Your answer")
+    for key, question in QUESTIONS.items():
+        value = answers.get(key)
+        table.add_row(question, value or Text("comes to you each time", style="yellow"))
+    console.print(table)
+
+
+@apply_app.command("prepare")
+def apply_prepare(
+    limit: Annotated[
+        int | None, typer.Option(help="Prepare at most this many (try 3 first).")
+    ] = None,
+    redo: Annotated[
+        bool, typer.Option(help="Redraft letters not yet sent (sent ones are kept).")
+    ] = False,
+) -> None:
+    """Draft a cover letter for every tier A (70+) and B (50-69) job. Nothing is sent."""
+    import json
+
+    from jobagent.apply.letter import WORD_LIMITS, tier_for
+    from jobagent.core.store import delete_prepared_packs, jobs_to_prepare, save_pack
+    from jobagent.match.cv import load_cv
+
+    settings = Settings.from_env()
+    conn = _open_db(settings)
+    if redo:
+        console.print(f"Redrafting {delete_prepared_packs(conn)} unsent letter(s).")
+    skipped: Counter = Counter()
+    todo = []
+    for row in jobs_to_prepare(conn):
+        dealbreakers = json.loads(row["assessment_json"])["dealbreakers"]
+        tier = tier_for(row["score"], dealbreakers, row["decision"])
+        if tier:
+            todo.append((row, tier))
+        elif row["decision"] == "rejected":
+            skipped["you rejected it"] += 1
+        elif dealbreakers:
+            skipped["a dealbreaker (e.g. US-based, clearance)"] += 1
+        else:
+            skipped["scored under 50"] += 1
+    todo = todo[:limit] if limit else todo
+    if not todo:
+        console.print("Nothing to prepare: every eligible job already has a letter.")
+        return
+
+    writer = _make_letter_writer(settings)
+    console.print(
+        f"Writing {len(todo)} cover letter(s) with {settings.inbox_model}, locally."
+    )
+    made: Counter = Counter()
+    flagged: list[str] = []
+    with Progress(console=console) as progress:
+        task = progress.add_task("Letters", total=len(todo))
+        for row, tier in todo:
+            ad = row["full_description"] or row["description"]
+            letter = writer.write(
+                row["title"], row["company"], ad, load_cv(row["cv"]), tier
+            )
+            save_pack(
+                conn,
+                row,
+                tier=tier,
+                cv=row["cv"],
+                letter=letter.text,
+                problems=letter.problems,
+                warnings=letter.warnings,
+                model=settings.inbox_model,
+            )
+            made[tier] += 1
+            if letter.problems:
+                flagged.append(f"#{row['id']} {row['title']}: {letter.problems[0]}")
+            progress.advance(task)
+
+    console.print(
+        f"Prepared {sum(made.values())}: tier A {made['A']} "
+        f"({WORD_LIMITS['A']} words max), tier B {made['B']} ({WORD_LIMITS['B']})."
+    )
+    for reason, n in skipped.items():
+        console.print(f"[dim]  Not prepared, {reason}: {n}[/]")
+    if flagged:
+        console.print(f"[yellow]  Letters that need your edit ({len(flagged)}):[/]")
+        for line in flagged:
+            console.print(f"    {line}", markup=False, style="yellow")
+    console.print("[dim]Next: uv run jobagent apply review[/]")
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """macOS clipboard. False if unavailable (the letter is on screen anyway)."""
+    import subprocess
+
+    try:
+        subprocess.run(["pbcopy"], input=text, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def _edit_text(text: str) -> str | None:
+    """Open text in your editor ($EDITOR, else nano); return the saved text, or None."""
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write(text)
+        path = Path(f.name)
+    try:
+        editor = shlex.split(os.environ.get("EDITOR") or "nano")
+        subprocess.run([*editor, str(path)], check=True)
+        return path.read_text()
+    except (OSError, subprocess.CalledProcessError) as e:
+        console.print(f"[red]Couldn't open an editor: {e}[/]")
+        return None
+    finally:
+        path.unlink(missing_ok=True)  # the letter is saved in the database, not here
+
+
+def _print_pack(p, problems: list[str], warnings: list[str]) -> None:
+    from jobagent.match.cv import CV_FILES
+
+    console.print(
+        Text(f"{p['title']} · {p['company']} · {p['location']}", style="bold")
+    )
+    console.print(f"Tier {p['tier']} · fit {p['score']} · {p['url']}")
+    console.print(f"Attach CV: [cyan]{CV_FILES[p['cv']]}[/]")
+    console.print(Panel(Text(p["letter"] or "(no letter)"), title="Cover letter"))
+    for problem in problems:
+        console.print(Text(f"  ✗ {problem}", style="red"))
+    for warning in warnings:
+        console.print(Text(f"  ! {warning}", style="yellow"))
+
+
+@apply_app.command("review")
+def apply_review() -> None:
+    """Approve each application, then send it yourself. Nothing is sent without you.
+
+    a: approve (copies the letter, opens the application page; you submit, then confirm)
+    e: edit the letter · s: skip for now · r: reject (never apply) · o: open the ad · q: quit
+    """
+    import json
+
+    from jobagent.apply.answers import QUESTIONS
+    from jobagent.apply.letter import WORD_LIMITS, check_letter
+    from jobagent.core.store import (
+        get_job,
+        mark_sent,
+        packs_to_review,
+        reject_pack,
+        save_decision,
+        update_pack_letter,
+    )
+    from jobagent.match.cv import CV_FILES, DEFAULT_CV_DIR, load_cv
+
+    answers = _load_answers_or_exit()
+    conn = _open_db(Settings.from_env())
+    packs = packs_to_review(conn)
+    if not packs:
+        console.print("Nothing to review. Run: uv run jobagent apply prepare")
+        return
+    console.print(
+        f"{len(packs)} application(s) ready, tier A first.\n"
+        "[bold]a[/] approve & send · [bold]e[/] edit letter · [bold]s[/] skip · "
+        "[bold]r[/] reject · [bold]o[/] open ad · [bold]q[/] quit"
+    )
+    console.print(f"[dim]CVs are in {DEFAULT_CV_DIR}[/]")
+    console.print("[dim]Screening answers (copy from here):[/]")
+    for key, question in QUESTIONS.items():
+        value = answers.get(key) or "[comes to you: answer it yourself]"
+        console.print(f"  {question}: {value}", markup=False, style="dim")
+
+    done: Counter = Counter()
+    for i, p in enumerate(packs, start=1):
+        console.rule(f"{i} of {len(packs)}")
+        letter = p["letter"]
+        problems = json.loads(p["problems_json"])
+        warnings = json.loads(p["warnings_json"])
+        _print_pack(p, problems, warnings)
+        while True:
+            choice = typer.prompt("Decision [a/e/s/r/o/q]", default="s").strip().lower()
+            if choice == "o":
+                typer.launch(p["url"])
+            elif choice == "e":
+                edited = _edit_text(letter)
+                if edited is not None and edited.strip() != letter.strip():
+                    letter = edited.strip()
+                    ad = p["ad"] or ""
+                    problems, warnings = check_letter(
+                        letter,
+                        load_cv(p["cv"]),
+                        ad,
+                        p["title"],
+                        p["company"],
+                        WORD_LIMITS[p["tier"]],
+                    )
+                    update_pack_letter(conn, p, letter, problems, warnings)
+                    p = {**dict(p), "letter": letter}
+                    _print_pack(p, problems, warnings)
+            elif (
+                choice == "a"
+                and problems
+                and not typer.confirm(
+                    "The checker found problems (above). Send it anyway?", default=False
+                )
+            ):
+                console.print("[dim]Press e to edit the letter.[/]")
+            elif choice in {"a", "s", "r", "q"}:
+                break
+            else:
+                console.print("Type a, e, s, r, o or q.")
+        if choice == "q":
+            break
+        if choice == "s":
+            done["skipped"] += 1
+            continue
+        if choice == "r":
+            reject_pack(conn, p)
+            save_decision(
+                conn, get_job(conn, p["job_id"]), "rejected", "rejected at apply"
+            )
+            done["rejected"] += 1
+            continue
+        copied = _copy_to_clipboard(letter)
+        console.print(
+            "Letter copied to the clipboard. " if copied else "Copy the letter above. "
+        )
+        typer.launch(p["url"])
+        if typer.confirm("Did you submit the application?", default=False):
+            mark_sent(
+                conn,
+                p,
+                letter=letter,
+                answers={k: answers.values[k] for k in QUESTIONS},
+                cv_file=CV_FILES[p["cv"]],
+            )
+            done["sent"] += 1
+        else:
+            console.print("[dim]Kept for later.[/]")
+            done["skipped"] += 1
+
+    console.print(
+        f"Sent {done['sent']} · rejected {done['rejected']} · skipped {done['skipped']}."
+    )

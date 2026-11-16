@@ -496,3 +496,75 @@ Two lessons:
 - **Every skill in a skills list needs a bullet that shows it.** That's what the scorer
   needed, and it's what a human reader needs too. Two CV edits followed: name the stack I
   built on Velarius, and say "Python" in a job bullet.
+
+## Phase 5 lite: from scored jobs to sent applications
+
+The scorer was good enough to stop tuning: its job is to rank jobs for me to decide on, and
+it does. The bottleneck had become sending applications. Plan: [plan-phase5.md](plan-phase5.md).
+
+**Tiers, not a top 10.** Every job scoring 70+ (tier A) gets a tailored cover letter; 50–69
+(tier B) gets a shorter one. Only jobs under 50 or with a hard blocker (US-based, clearance,
+or one I rejected) are skipped. Volume matters in a job search; effort scales with fit.
+
+**Screening answers are copied, never composed.** My answers to right to work, sponsorship,
+notice period and so on live in a local file I approved. A question without an answer there
+comes to me. The model never answers a screening question on my behalf.
+
+**The model writes; code checks.** Cover letters come from the local model, then plain code
+checks them:
+
+- every number must appear in my CV or the ad ("cut latency by 60%" when the CV says 35% is
+  caught),
+- every capitalised name (tool, employer, project) must appear in my CV; one only the ad
+  mentions is allowed but flagged, in case the letter claims it as my experience,
+- no em dashes or spaced en dashes between clauses (they read as machine-written), no
+  placeholders like "[Company]", and a word limit.
+
+A failing letter is redrafted once with the problems spelled out, then shown to me flagged.
+Sending a flagged letter needs an explicit "send anyway", so a false alarm can't block me.
+
+**I press submit.** Reed's apply flow is behind a login, which the brief rules out for
+automation, so `apply review` copies the letter, opens the page, and asks "Did you submit
+it?". Only a yes records the application, with exactly what was sent: letter, CV file and
+screening answers. It's stored as a normal application (`own_agent`, `submitted`), so the
+inbox side can link the "we received your application" email to it later.
+
+Two bugs the tests caught before any real run:
+
+- `def load_answers(path=DEFAULT_PATH)`: Python evaluates a default argument **once, when
+  the function is defined**. Overriding the module constant later had no effect, so the
+  tests were quietly reading my real answers file. Fix: `path=None`, then look the default
+  up inside the function.
+- `typer.edit` doesn't exist. Recent Typer versions stopped depending on click and only
+  vendor a private copy, so I wrote a small `$EDITOR` helper instead of importing a private
+  module that could vanish on any upgrade.
+
+### The first three letters went out with false claims
+
+I prepared three letters and sent them. Reading them afterwards: one put my client work at
+the wrong job, one presented YOLO (computer vision) as "generative AI and LLMs" work, and
+one claimed microservices, Terraform-built CI/CD pipelines, cloud migrations and mentoring,
+none of which my CV says. The code checks had passed all three.
+
+Why: the checks were word-level. Every number and name in those letters *was* in my CV;
+the falsehood was in how real words were combined ("delivered scalable data pipelines",
+"collaborated with clients at PLATE"). A word-level check can't see a false sentence made of
+true words.
+
+Fixes, in layers:
+
+1. **Prompt**: name the role and company; say where each piece of work happened and never
+   move a fact between jobs; never upgrade a bullet ("enterprise-scale", "led",
+   "mentored"); leave out what the CV doesn't show; a skills-list entry isn't hands-on
+   experience.
+2. **More code checks**: filler phrases ("aligns with", "meets the requirements"), repeated
+   "I have" openings, and the role or company must be named.
+3. **Sentence-by-sentence check by the model**: for each sentence, "does the CV back every
+   claim in it, including which job it happened at?" The same generate-then-verify pattern
+   as the scorer. Unbacked sentences force a redraft; if they survive it, the letter is
+   flagged.
+
+Lessons: **a check passing is not the same as the output being right**, only that it didn't
+fail the things the check looks at. And the "try 3 first" step only works if those 3 are
+read before anything is sent: the review queue should make that the default, not rely on
+me remembering.
