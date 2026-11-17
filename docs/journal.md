@@ -641,3 +641,26 @@ letter can get past, and jobs rejected in review.
 When a rule changes on purpose, the failing tests are the to-do list: each one marks a
 place the old rule was written down. They were updated to state the new rule, including
 one that checks the old "scored under 50" skip never comes back.
+
+## Letters: one heading, one opening, one name
+
+The first full batch (135 letters) flagged 30, and reading them showed three causes that
+had nothing to do with false claims:
+
+- **The model added a heading** ("Applied AI Engineer, Startups at Anthropic") above 23
+  letters. The prompt itself had a line in exactly that shape (`JOB: {title} at
+  {company}`), so the model was copying the prompt. The sentence checker joined the
+  heading onto the next line, producing "Applied AI Engineer at Anthropic I built...",
+  which reads as a claim to have worked there, and flagged it. Fixed three ways: the
+  checker splits each line on its own, code removes the heading (a line containing the
+  job title with no end punctuation) the moment the model replies, and the prompt label
+  is now `JOB AD (role: ...; company: ...)`.
+- **Every letter opened with the same project**, the one with the most numbers, because
+  the prompt said to restate bullets "with their real numbers". The prompt now fixes the
+  opening ("I'm applying for the ... role at ...") and asks for the work that best fits
+  this ad's top requirement, not the most numeric.
+- **One letter was in the third person.** A prompt rule asks for "I", and a code check
+  flags your name anywhere but under the sign-off.
+
+The pattern: small models copy whatever shape the prompt shows them, so prompt examples
+and labels are part of the instructions. And anything that must hold is enforced in code.

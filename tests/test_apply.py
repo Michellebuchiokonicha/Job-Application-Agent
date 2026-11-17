@@ -390,6 +390,14 @@ def test_repeated_i_have_openings_are_a_problem():
     assert any('"I have"' in p for p in problems)
 
 
+def test_third_person_letter_is_a_problem_but_the_sign_off_is_fine():
+    problems, _ = check(letter("Ada built RAG pipelines."))
+    assert any("first person" in p for p in problems)
+    # The name under "Kind regards," is fine.
+    problems, _ = check(letter("I built RAG pipelines."))
+    assert not any("first person" in p for p in problems)
+
+
 def test_letter_must_name_the_role_or_company():
     text = (
         "Dear Hiring Manager,\n\nI built RAG pipelines.\n\nKind regards,\nAda Example"

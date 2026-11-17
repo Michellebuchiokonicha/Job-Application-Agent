@@ -34,16 +34,22 @@ LETTER_PROMPT = """\
 Write a cover letter from the candidate whose CV is below, for the job below.
 
 Rules:
-- Start with "Dear Hiring Manager," then a first sentence that names the role ({title}) \
-and the company ({company}).
+- Start with "Dear Hiring Manager," and then, with no heading or title line, open with: \
+"I'm applying for the {title} role at {company}." Follow it with one sentence on the \
+piece of CV work that best matches the most important requirement in THIS ad.
 - {paragraphs} short paragraphs, at most {words} words in total. Plain text: no subject \
 line, no addresses, no date. End with "Kind regards," and then {name} on its own line.
+- Write as the candidate, in the first person ("I"). Never use the candidate's name \
+except on the line after "Kind regards,".
 - Pick the {picks} most important requirements in the ad. For each, give ONE specific \
 piece of work from the CV that matches it, and say where it happened: the employer or \
 project the CV puts it under. Never move a fact from one job or project to another.
-- Restate only what a CV bullet says, with its real numbers. Never upgrade it: no \
-"enterprise-scale", "led", "mentored", "migrated" or any other claim the bullet doesn't \
-make. A skill that's only in the CV's skills list is not hands-on experience.
+- Choose the CV work that fits each requirement best, not the work with the most \
+numbers. Different jobs need different examples.
+- Restate only what a CV bullet says, and keep any numbers exactly as the CV has them. \
+Never upgrade it: no "enterprise-scale", "led", "mentored", "migrated" or any other \
+claim the bullet doesn't make. A skill that's only in the CV's skills list is not \
+hands-on experience.
 - If the ad asks for something the CV doesn't show, leave it out completely. Never write \
 that the candidate has it.
 - Let the examples speak: don't say how the experience "aligns with" or "meets" the \
@@ -53,7 +59,7 @@ interest", "I am excited to apply" or "passionate about".
 - Never use an em dash or an en dash between clauses. Use commas, colons or full stops.
 - Don't mention visas, salary or notice periods.
 
-JOB: {title} at {company}
+JOB AD (role: {title}; company: {company}):
 {ad}
 
 CANDIDATE CV:
@@ -155,6 +161,16 @@ def check_letter(
     i_have = len(re.findall(r"(?:^|[.!?]\s+|\n\s*)I have\b", letter))
     if i_have > 1:
         problems.append(f'starts {i_have} sentences with "I have"')
+    # Your name belongs only under "Kind regards,". Anywhere else, the letter is talking
+    # about you in the third person ("Michelle built...").
+    name = candidate_name(cv)
+    first_name = name.split()[0] if name else ""
+    if first_name and any(
+        re.search(rf"\b{re.escape(first_name)}\b", ln)
+        for ln in letter.splitlines()
+        if ln.strip() != name
+    ):
+        problems.append("refers to you by name: write it in the first person (I)")
     first_company_word = (re.findall(r"[A-Za-z0-9]+", company) or [""])[0].lower()
     if title.lower() not in low_letter and first_company_word not in low_letter:
         problems.append("doesn't name the role or the company")
