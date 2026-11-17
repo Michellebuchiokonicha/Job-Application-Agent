@@ -304,7 +304,6 @@ def test_prepare_writes_letters_for_every_eligible_job(env):
     assert "Nothing to prepare" in again and len(writer.calls) == 3
 
 
-
 def test_review_approve_and_confirm_records_exactly_what_was_sent(env):
     conn, _ = env
     CliRunner().invoke(cli.app, ["apply", "prepare"])
@@ -328,14 +327,14 @@ def test_review_not_submitted_keeps_it_for_later(env):
     CliRunner().invoke(cli.app, ["apply", "prepare"])
     out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\nn\nq\n").output
     assert "Kept for later" in out
-    assert pack_counts(conn) == {"prepared": 2}
+    assert pack_counts(conn) == {"prepared": 3}
 
 
 def test_review_reject_also_records_the_decision(env):
     conn, _ = env
     CliRunner().invoke(cli.app, ["apply", "prepare"])
     CliRunner().invoke(cli.app, ["apply", "review"], input="r\nq\n")
-    assert pack_counts(conn) == {"prepared": 1, "rejected": 1}
+    assert pack_counts(conn) == {"prepared": 2, "rejected": 1}
     decision = conn.execute(
         "SELECT decision FROM job_decisions WHERE external_id = '1'"
     ).fetchone()
@@ -374,7 +373,7 @@ def test_jobs_to_prepare_skips_jobs_that_have_a_pack(env):
     conn, _ = env
     before = len(jobs_to_prepare(conn))
     CliRunner().invoke(cli.app, ["apply", "prepare"])
-    assert len(jobs_to_prepare(conn)) == before - 2
+    assert len(jobs_to_prepare(conn)) == before - 3
 
 
 # --- Stricter letters: filler, openings, and the sentence-by-sentence check ---------------
@@ -444,7 +443,6 @@ def test_redo_redrafts_unsent_letters_but_keeps_sent_ones(env):
     assert "Redrafting 2 unsent letter(s)" in out
     assert pack_counts(conn) == {"sent": 1, "prepared": 2}
     assert writer.calls[-1] == ("Data Scientist", "B")
-
 
 
 def test_model_sizes_are_not_names():

@@ -15,7 +15,6 @@ from jobagent.inbox.classify import ChatClient
 from jobagent.match.score import MAX_JOB_CHARS, MODEL_TIMEOUT, NUM_CTX
 
 TIER_A_MIN = 70
-TIER_B_MIN = 50
 WORD_LIMITS = {"A": 250, "B": 150}
 LETTER_NUM_PREDICT = 1024  # a 250-word letter is ~350 tokens; more means a loop
 
@@ -23,12 +22,12 @@ LETTER_NUM_PREDICT = 1024  # a 250-word letter is ~350 tokens; more means a loop
 def tier_for(
     score: int | None, dealbreakers: list[str], decision: str | None
 ) -> str | None:
-    """A (70+), B (50-69) or None (don't apply). Rejected or blocked jobs never get one."""
+    """A (70+) or B (any other score). Rejected or blocked jobs never get one."""
+
     if score is None or decision == "rejected" or dealbreakers:
         return None
     # Every job that passed the title filter gets a letter: the score only sets its length.
     return "A" if score >= TIER_A_MIN else "B"
-
 
 
 LETTER_PROMPT = """\

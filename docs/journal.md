@@ -625,3 +625,19 @@ finished normally.
 **Still open:** the existing guard drops requirements whose quote isn't in the ad, but a
 one-word quote like "Evaluation" passes it, so v7 scores may include a few CV items. The
 lesson: an error message is a hypothesis. Keep the evidence it was based on.
+
+## The score orders the queue; it no longer decides who gets a letter
+
+Letters went only to jobs scoring 50 or more. Of 162 jobs that passed the title and
+location filter, that blocked 90. But at 50 to 80 applications a day all 162 take two or
+three days, so the floor saved nothing, and the score it relied on can be wrong (one job
+was "poor fit" from 4 of its ~15 requirements, after the model drifted into the CV).
+
+Now every job that passes the filter gets a letter: 70+ gets the longer tier A letter,
+anything else tier B. The score still sets the order (best first) and the letter length.
+Still blocked, on purpose: dealbreakers (security clearance, PhD essential), which no
+letter can get past, and jobs rejected in review.
+
+When a rule changes on purpose, the failing tests are the to-do list: each one marks a
+place the old rule was written down. They were updated to state the new rule, including
+one that checks the old "scored under 50" skip never comes back.
