@@ -128,6 +128,22 @@ _CLICHES = (
     "this mirrors",
     "this shows my ability",
 )
+# Words that upgrade what you did. Fine if your CV uses them; invented if it doesn't.
+# The sentence checker (a small model) misses some, so code checks these exactly.
+_UPGRADES = (
+    "led",
+    "spearheaded",
+    "headed",
+    "mentored",
+    "mentoring",
+    "owned",
+    "owning",
+    "oversaw",
+    "managed",
+    "pioneered",
+    "migrated",
+    "enterprise-scale",
+)
 # The opening the prompt fixes. Code wrote it, so the model doesn't check it.
 _OPENING = re.compile(r"I(?:'m|’m| am) applying for the ")
 
@@ -170,6 +186,14 @@ def check_letter(
     for phrase in _CLICHES:
         if phrase in low_letter:
             problems.append(f'uses filler: "{phrase}"')
+    # The title can contain these words ("Lead AI Engineer"), so it's left out.
+    own_text = letter.replace(title, "").replace(company, "").lower()
+    cv_low = cv.lower()
+    for word in _UPGRADES:
+        pattern = rf"(?<![a-z-]){re.escape(word)}(?![a-z-])"
+        used = pattern + (r"(?!\s+to\b)" if word == "led" else "")  # "led to": cause
+        if re.search(used, own_text) and not re.search(pattern, cv_low):
+            problems.append(f'says "{word}", which your CV never does')
     i_have = len(re.findall(r"(?:^|[.!?]\s+|\n\s*)I have\b", letter))
     if i_have > 1:
         problems.append(f'starts {i_have} sentences with "I have"')
@@ -378,9 +402,10 @@ class LetterWriter:
                     "\n- " + "\n- ".join(problems),
                 },
             ]
-        # Still unbacked after the redraft, and nothing else wrong: drop those sentences
-        # rather than flag the letter. Shorter but true; you're told what was removed.
-        if unsupported and len(problems) == len(unsupported):
+        # Still unbacked after the redraft: drop those sentences, then check the letter
+        # again. If nothing else is wrong, it goes through, shorter but true, and you're
+        # told what was removed. Anything still wrong keeps it flagged for you.
+        if unsupported:
             trimmed = remove_sentences(text, unsupported)
             if len(letter_sentences(trimmed)) >= MIN_SENTENCES_LEFT:
                 left, left_warnings = check_letter(

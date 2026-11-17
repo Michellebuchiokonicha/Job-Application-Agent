@@ -756,3 +756,48 @@ def test_redo_flagged_redrafts_only_the_flagged_letters(env):
     out = CliRunner().invoke(cli.app, ["apply", "prepare", "--redo-flagged"]).output
     assert "Redrafting 1 unsent letter(s)" in out
     assert writer.calls == [("ML Engineer", "B")]
+
+
+# --- Upgrade words: checked exactly, because the sentence checker misses some ----------
+
+
+def test_an_upgrade_word_the_cv_never_uses_is_a_problem():
+    problems, _ = check(letter("I led the RAG pipelines on MongoDB Vector Search."))
+    assert 'says "led", which your CV never does' in problems
+
+
+def test_upgrade_word_is_fine_when_the_cv_uses_it():
+    cv = CV + "Led the RAG rollout across two teams.\n"
+    problems, _ = check_letter(
+        letter("I led the RAG rollout across two teams."),
+        cv,
+        AD,
+        "AI Engineer",
+        "Beta Labs",
+        250,
+    )
+    assert not any("which your CV never does" in p for p in problems)
+
+
+def test_led_to_and_lead_in_the_job_title_are_not_upgrades():
+    text = (
+        "Dear Hiring Manager,\n\nI'm applying for the Lead AI Engineer role at Beta "
+        "Labs. Better retrieval led to fewer support tickets.\n\nKind regards,\n"
+        "Ada Example"
+    )
+    problems, _ = check_letter(text, CV, AD, "Lead AI Engineer", "Beta Labs", 250)
+    assert not any("which your CV never does" in p for p in problems)
+
+
+def test_recheck_flags_letters_a_new_check_would_catch(env):
+    conn, writer = env
+    writer.text = letter("I led the RAG pipelines on MongoDB Vector Search.")
+    # Prepared before the check existed: saved as clean.
+    CliRunner().invoke(cli.app, ["apply", "prepare"])
+    conn.execute("UPDATE application_packs SET problems_json = '[]'")
+    out = CliRunner().invoke(cli.app, ["apply", "recheck"]).output
+    assert "Newly flagged: 3" in out and 'says "led"' in out
+    flagged = conn.execute(
+        "SELECT COUNT(*) FROM application_packs WHERE problems_json != '[]'"
+    ).fetchone()[0]
+    assert flagged == 3

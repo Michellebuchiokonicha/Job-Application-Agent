@@ -1407,6 +1407,44 @@ def _fill_in_browser(
         return typer.confirm("Did you submit the application?", default=False)
 
 
+@apply_app.command("recheck")
+def apply_recheck() -> None:
+    """Re-run the code checks on every unsent letter (seconds, no model). Use after a
+    check is added; then `apply prepare --redo-flagged` redrafts what it caught."""
+    import json
+
+    from jobagent.apply.letter import WORD_LIMITS, check_letter
+    from jobagent.core.store import packs_to_review, update_pack_letter
+    from jobagent.match.cv import load_cv
+
+    conn = _open_db(Settings.from_env())
+    # Kept from the model's sentence check: it isn't re-run here.
+    model_problem, model_warning = "not backed by your CV", ("removed,", "the sentence")
+    newly = []
+    for p in packs_to_review(conn):
+        before = json.loads(p["problems_json"])
+        problems, warnings = check_letter(
+            p["letter"],
+            load_cv(p["cv"]),
+            p["ad"] or "",
+            p["title"],
+            p["company"],
+            WORD_LIMITS[p["tier"]],
+        )
+        problems += [x for x in before if x.startswith(model_problem)]
+        warnings += [
+            w for w in json.loads(p["warnings_json"]) if w.startswith(model_warning)
+        ]
+        update_pack_letter(conn, p, p["letter"], problems, warnings)
+        if problems and not before:
+            newly.append(f"#{p['job_id']} {p['title']}: {problems[0]}")
+    console.print(f"Rechecked. Newly flagged: {len(newly)}")
+    for line in newly:
+        console.print(Text(f"  {line}"))
+    if newly:
+        console.print("Next: uv run jobagent apply prepare --redo-flagged")
+
+
 @apply_app.command("review")
 def apply_review() -> None:
     """Approve each application, then send it yourself. Nothing is sent without you.
