@@ -228,6 +228,20 @@ def candidate_name(cv: str) -> str:
     return next((line.strip() for line in cv.splitlines() if line.strip()), "")
 
 
+def drop_heading(letter: str, title: str) -> str:
+    """Remove a heading line such as "AI Engineer at Acme" (the model adds one despite the
+    prompt). A heading contains the job title and has no end punctuation. A real sentence
+    naming the role ends with a full stop, and your name under the sign-off has no title,
+    so both stay."""
+    t = title.lower()
+    kept = [
+        ln
+        for ln in letter.splitlines()
+        if not (t in ln.lower() and not re.search(r"[.!?:,]\s*$", ln))
+    ]
+    return "\n".join(kept)
+
+
 class LetterWriter:
     def __init__(self, client: ChatClient, model: str):
         self.client = client
@@ -302,7 +316,7 @@ class LetterWriter:
                     )
                     return Letter("", [stuck])
                 break
-            text = reply
+            text = drop_heading(reply, title)
             problems, warnings = check_letter(text, cv, ad, title, company, words)
             unsupported = self.unsupported(text, cv)
             if unsupported is None:

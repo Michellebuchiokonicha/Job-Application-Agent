@@ -14,6 +14,7 @@ from jobagent.apply.letter import (
     Letter,
     LetterWriter,
     check_letter,
+    drop_heading,
     letter_sentences,
     tier_for,
 )
@@ -417,6 +418,19 @@ def test_a_heading_line_is_not_glued_to_the_next_sentence():
         "I built RAG pipelines.",
         "It worked.",
     ]
+
+
+def test_drop_heading_removes_the_title_line_and_keeps_the_rest():
+    text = (
+        "Dear Hiring Manager,\nAI Engineer at Beta Labs\n\n"
+        "I'm applying for the AI Engineer role at Beta Labs. I built RAG pipelines."
+        "\n\nKind regards,\nAda Example"
+    )
+    assert drop_heading(text, "AI Engineer") == (
+        "Dear Hiring Manager,\n\n"
+        "I'm applying for the AI Engineer role at Beta Labs. I built RAG pipelines."
+        "\n\nKind regards,\nAda Example"
+    )
 
 
 def test_a_sentence_the_cv_doesnt_back_is_redrafted():
