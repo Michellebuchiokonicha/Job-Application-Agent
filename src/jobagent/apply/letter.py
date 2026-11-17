@@ -270,6 +270,19 @@ def drop_heading(letter: str, title: str) -> str:
     return "\n".join(kept)
 
 
+# After removing unbacked sentences, a letter needs at least this many left (the opening
+# plus two): fewer, and it's flagged for you instead of sent thin.
+MIN_SENTENCES_LEFT = 3
+
+
+def remove_sentences(letter: str, sentences: list[str]) -> str:
+    """The letter without these sentences, its spacing and paragraphs tidied."""
+    for t in sentences:
+        letter = letter.replace(t, "", 1)
+    lines = [re.sub(r" {2,}", " ", ln).strip() for ln in letter.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 class LetterWriter:
     def __init__(self, client: ChatClient, model: str):
         self.client = client
@@ -333,6 +346,7 @@ class LetterWriter:
         text = ""
         problems: list[str] = []
         warnings: list[str] = []
+        unsupported: list[str] | None = None
         for attempt in range(2):
             reply = self._chat(messages)
             if reply is None:
@@ -364,4 +378,17 @@ class LetterWriter:
                     "\n- " + "\n- ".join(problems),
                 },
             ]
+        # Still unbacked after the redraft, and nothing else wrong: drop those sentences
+        # rather than flag the letter. Shorter but true; you're told what was removed.
+        if unsupported and len(problems) == len(unsupported):
+            trimmed = remove_sentences(text, unsupported)
+            if len(letter_sentences(trimmed)) >= MIN_SENTENCES_LEFT:
+                left, left_warnings = check_letter(
+                    trimmed, cv, ad, title, company, words
+                )
+                if not left:
+                    removed = [
+                        f'removed, your CV doesn\'t back it: "{t}"' for t in unsupported
+                    ]
+                    return Letter(trimmed, [], left_warnings + removed)
         return Letter(text, problems, warnings)

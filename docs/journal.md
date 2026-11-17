@@ -706,3 +706,9 @@ only flagged letters, for next time.
 
 Lesson, third time today: a small model copies the prompt's wording, including the words
 in "don't" rules. Before trusting a check, run it over the outputs it already passed.
+
+After the redo, 30 of 137 letters were still flagged, nearly all for one false sentence
+each (often an ad requirement written up as my experience). Now, if a sentence is still
+unbacked after the redraft and nothing else is wrong, code removes it instead of
+flagging the letter, as long as the opening and two more sentences remain. The removed
+sentence is shown as a warning in review. Shorter but true beats flagged.

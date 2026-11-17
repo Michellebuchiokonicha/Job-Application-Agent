@@ -457,10 +457,24 @@ def test_a_sentence_the_cv_doesnt_back_is_redrafted():
 
 
 def test_an_unbacked_sentence_still_there_after_redraft_is_flagged():
+    # Removing it would leave only the opening: too thin to send, so it comes to you.
     wrong = letter("At Acme Foods I led an enterprise-scale Python platform.")
     chat = FakeChat(wrong, wrong, unsupported=("enterprise-scale",))
     out = LetterWriter(chat, "m").write("AI Engineer", "Beta Labs", AD, CV, "A")
     assert any("not backed by your CV" in p for p in out.problems)
+
+
+def test_an_unbacked_sentence_left_after_redraft_is_removed_and_you_are_told():
+    true = "I built RAG pipelines on MongoDB Vector Search with Python. It worked."
+    false = "At Acme Foods I led an enterprise-scale Python platform."
+    wrong = letter(f"{true}\n\n{false}")
+    chat = FakeChat(wrong, wrong, unsupported=("enterprise-scale",))
+    out = LetterWriter(chat, "m").write("AI Engineer", "Beta Labs", AD, CV, "A")
+    assert out.problems == []  # nothing left to fix: ready to send
+    assert "enterprise-scale" not in out.text and true in out.text
+    assert out.text.endswith("Kind regards,\nAda Example")
+    assert "\n\n\n" not in out.text  # the emptied paragraph doesn't leave a gap
+    assert any("removed" in w and "enterprise-scale" in w for w in out.warnings)
 
 
 def test_a_failed_sentence_check_is_a_warning_not_silence():
