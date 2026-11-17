@@ -405,6 +405,20 @@ def test_letter_sentences_drop_greeting_and_sign_off():
     ]
 
 
+def test_a_heading_line_is_not_glued_to_the_next_sentence():
+    # The model sometimes adds "Role at Company" with no full stop. Joined to the next
+    # line, it read as "AI Engineer at Beta Labs I built...": a false claim.
+    text = (
+        "Dear Hiring Manager,\nAI Engineer at Beta Labs\n\n"
+        "I built RAG pipelines. It worked.\n\nKind regards,\nAda Example"
+    )
+    assert letter_sentences(text) == [
+        "AI Engineer at Beta Labs",
+        "I built RAG pipelines.",
+        "It worked.",
+    ]
+
+
 def test_a_sentence_the_cv_doesnt_back_is_redrafted():
     # Real words, false claim: the kind of error the word-level checks can't see.
     wrong = letter("At Acme Foods I led an enterprise-scale Python platform.")

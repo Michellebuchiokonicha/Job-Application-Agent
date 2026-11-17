@@ -205,7 +205,11 @@ class Letter:
 
 
 def letter_sentences(letter: str) -> list[str]:
-    """The letter's sentences, without the greeting and sign-off lines."""
+    """The letter's sentences, without the greeting and sign-off lines.
+
+    Each line is split on its own: a line with no full stop (a heading like "AI Engineer
+    at Acme") must not run into the next sentence and read as a claim.
+    """
     lines = [ln.strip() for ln in letter.splitlines() if ln.strip()]
     body = [
         ln
@@ -216,8 +220,7 @@ def letter_sentences(letter: str) -> list[str]:
     ]
     if body and len(body[-1].split()) <= 4 and not body[-1].endswith("."):
         body = body[:-1]  # the name under the sign-off
-    text = " ".join(body)
-    return [t for t in re.split(r"(?<=[.!?])\s+", text) if t.strip()]
+    return [t for ln in body for t in re.split(r"(?<=[.!?])\s+", ln) if t.strip()]
 
 
 def candidate_name(cv: str) -> str:
