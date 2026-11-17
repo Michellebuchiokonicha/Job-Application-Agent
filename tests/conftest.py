@@ -25,3 +25,15 @@ def _no_real_job_boards(monkeypatch):
     from jobagent import cli
 
     monkeypatch.setattr(cli, "_make_boards", lambda: _NoBoards())
+
+
+@pytest.fixture(autouse=True)
+def _no_real_browser(monkeypatch):
+    """Tests never open Chrome. A test that needs the browser step patches
+    browser.open_and_fill itself (with a fake page)."""
+    from jobagent.apply import browser
+
+    def no_browser(*args, **kwargs):
+        raise RuntimeError("no browser in tests")
+
+    monkeypatch.setattr(browser, "open_and_fill", no_browser)

@@ -664,3 +664,26 @@ had nothing to do with false claims:
 
 The pattern: small models copy whatever shape the prompt shows them, so prompt examples
 and labels are part of the instructions. And anything that must hold is enforced in code.
+
+## Forms: read ahead, ask once, fill in a real browser, never submit
+
+Approving a job used to mean typing every field of its form by hand. Lever's apply page
+turns out to be friendly to a program: standard fields are plain inputs, and every custom
+question carries its own definition (text, type, options) as JSON in the page. So the
+agent reads the whole form with one HTTP request, before any browser opens.
+
+Each question then gets an answer from one of three sources, all approved by me: my
+profile (contact details, outside the repo), my screening answers, or my answer to the
+same question on an earlier form. Anything else is asked once in the terminal, picked by
+number for choice questions (so it's always a real option), and saved. A choice question
+never gets "the nearest" option: if my answer isn't exactly one of them, it comes to me.
+On a real Palantir form: 8 of 21 questions filled from the start; Palantir's second role
+asks almost nothing, because the questions are the same.
+
+Playwright then opens the form in my own Chrome, fills it, attaches the CV and stops.
+It never clicks Submit: I check the page and submit it. A field it can't fill is named,
+not skipped. If Chrome can't start, the answers are printed to copy instead.
+
+Tests never open a browser: the filler takes the page as a parameter, so tests pass a
+fake page that records each action, and a shared fixture blocks the real browser. (One
+early run took 12 seconds instead of 1: the tests were launching Chrome.)

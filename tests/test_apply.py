@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from jobagent import cli
 from jobagent.apply import answers as answers_module
+from jobagent.apply import browser as browser_module
 from jobagent.apply import profile as profile_module
 from jobagent.apply.answers import ASK_ME, QUESTIONS, AnswersError, load_answers
 from jobagent.apply.fill import question_key
@@ -582,3 +583,38 @@ def test_no_profile_falls_back_to_the_page(lever_env, tmp_path, monkeypatch):
     monkeypatch.setattr(profile_module, "DEFAULT_PROFILE_PATH", tmp_path / "none.toml")
     out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\ny\nq\n").output
     assert "No profile yet" in out and "Sent 1" in out
+
+
+def test_approve_fills_the_form_in_the_browser_and_records_it(lever_env, monkeypatch):
+    conn = lever_env
+    seen = {}
+
+    def fake_open_and_fill(url, questions, answers, cv_path, hand_over):
+        seen.update(url=url, answers=answers, cv=cv_path.name)
+        return hand_over(browser_module.FillResult(filled=["Full name"]))
+
+    monkeypatch.setattr(browser_module, "open_and_fill", fake_open_and_fill)
+    out = (
+        CliRunner()
+        .invoke(cli.app, ["apply", "review"], input="a\n2\nAda\ny\nq\n")
+        .output
+    )
+    assert seen["url"].endswith("/apply") and seen["cv"] == "cv_ai_engineer.pdf"
+    assert seen["answers"]["name"] == "Ada Example"
+    assert seen["answers"]["comments"].startswith("Dear Hiring Manager")  # the letter
+    assert "click Submit yourself" in out and "Sent 1" in out
+    sent = conn.execute(
+        "SELECT answers_json FROM application_packs WHERE status = 'sent'"
+    ).fetchone()
+    assert json.loads(sent["answers_json"])["Full name"] == "Ada Example"
+
+
+def test_no_browser_falls_back_to_copying_by_hand(lever_env):
+    # conftest's guard makes the browser fail, as it would without Chrome.
+    out = (
+        CliRunner()
+        .invoke(cli.app, ["apply", "review"], input="a\n2\nAda\ny\nq\n")
+        .output
+    )
+    assert "Couldn't open the browser" in out and "Answers for this form" in out
+    assert "Sent 1" in out

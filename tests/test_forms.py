@@ -2,7 +2,9 @@
 
 import html
 import json
+from pathlib import Path
 
+from jobagent.apply.browser import fill_lever_form
 from jobagent.apply.forms import Question, lever_apply_url, parse_lever_form
 
 
@@ -84,3 +86,82 @@ def test_apply_url():
     job = "https://jobs.lever.co/acmeai/u-1"
     assert lever_apply_url(job) == job + "/apply"
     assert lever_apply_url(job + "/apply") == job + "/apply"
+
+
+# --- Filling the page (a fake Playwright page: no browser) ---------------------------------
+
+
+class FakePage:
+    def __init__(self, missing=()):
+        self.calls, self.missing = [], set(missing)
+
+    def _do(self, action, selector, value=None):
+        if any(m in selector for m in self.missing):
+            raise TimeoutError(selector)
+        self.calls.append((action, selector, value))
+
+    def fill(self, selector, value):
+        self._do("fill", selector, value)
+
+    def select_option(self, selector, value):
+        self._do("select", selector, value)
+
+    def check(self, selector):
+        self._do("check", selector)
+
+    def set_input_files(self, selector, path):
+        self._do("upload", selector, path)
+
+
+QS = [
+    Question("name", "Full name", "text", True),
+    Question("cards[a][field0]", "Heard?", "dropdown", True, ("Job board", "Other")),
+    Question("cards[a][field1]", "Sponsor?", "multiple-choice", True, ("Yes", "No")),
+    Question("cards[a][field2]", "Languages", "multiple-select", True, ("EN", "FR")),
+    Question("comments", "Cover letter", "textarea", False),
+    Question("cards[a][field3]", "Not answered", "text", False),
+]
+ANSWERS = {
+    "name": "Ada Example",
+    "cards[a][field0]": "Other",
+    "cards[a][field1]": "No",
+    "cards[a][field2]": "EN; FR",
+    "comments": "Dear Hiring Manager, ...",
+}
+
+
+def test_fills_each_kind_of_field_the_right_way():
+    page = FakePage()
+    result = fill_lever_form(page, QS, ANSWERS, Path("/cv/ai.pdf"))
+    assert page.calls == [
+        ("upload", 'input[name="resume"]', "/cv/ai.pdf"),
+        ("fill", '[name="name"]', "Ada Example"),
+        ("select", 'select[name="cards[a][field0]"]', "Other"),
+        ("check", 'input[name="cards[a][field1]"][value="No"]', None),
+        ("check", 'input[name="cards[a][field2]"][value="EN"]', None),
+        ("check", 'input[name="cards[a][field2]"][value="FR"]', None),
+        ("fill", '[name="comments"]', "Dear Hiring Manager, ..."),
+    ]
+    assert result.failed == [] and "Not answered" not in result.filled
+
+
+def test_a_field_it_cannot_fill_is_named_and_the_rest_still_filled():
+    page = FakePage(missing={"field0"})
+    result = fill_lever_form(page, QS, ANSWERS, None)
+    assert result.failed == ["Heard? (TimeoutError)"]
+    assert "Cover letter" in result.filled
+
+
+def test_it_never_clicks_anything_but_answers():
+    page = FakePage()
+    fill_lever_form(page, QS, ANSWERS, None)
+    assert not any("submit" in selector.lower() for _, selector, _ in page.calls)
+
+
+def test_quotes_in_an_answer_cannot_break_the_selector():
+    q = Question("cards[b][field0]", "Pick", "multiple-choice", True, ('Say "yes"',))
+    page = FakePage()
+    fill_lever_form(page, [q], {q.field: 'Say "yes"'}, None)
+    assert page.calls == [
+        ("check", 'input[name="cards[b][field0]"][value="Say \\"yes\\""]', None)
+    ]

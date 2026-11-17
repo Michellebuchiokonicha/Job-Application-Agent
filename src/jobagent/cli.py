@@ -1296,10 +1296,10 @@ def _ask_question(q) -> str | None:
         console.print("Pick one number.")
 
 
-def _complete_form(conn, p, letter: str, answers) -> dict[str, str] | None:
+def _complete_form(conn, p, letter: str, answers):
     """For a job with a readable form (Lever, for now): fill what's known, ask you the
-    rest, save your answers for next time. Returns {question: answer}, or None if the
-    form couldn't be read (then you fill it on the page, as before)."""
+    rest, save your answers for next time. Returns (questions, {field: answer}), or None
+    if the form couldn't be read (then you fill it on the page, as before)."""
     from jobagent.apply.fill import plan_form, question_key
     from jobagent.apply.forms import lever_apply_url, parse_lever_form
     from jobagent.apply.profile import ProfileError, load_profile
@@ -1319,7 +1319,6 @@ def _complete_form(conn, p, letter: str, answers) -> dict[str, str] | None:
         return None
 
     plan = plan_form(questions, profile, answers, saved_answers(conn), letter)
-    labels = {q.field: q.label for q in questions}
     console.print(
         f"[green]Form: {len(plan.filled) - ('comments' in plan.filled)} answered from "
         "your profile, answers and earlier forms[/] (plus the letter) · "
@@ -1332,13 +1331,46 @@ def _complete_form(conn, p, letter: str, answers) -> dict[str, str] | None:
             continue
         save_answer(conn, question_key(q.label), q.label, answer)
         plan.filled[q.field] = answer
-    filled = {labels.get(f, f): a for f, a in plan.filled.items()}
-    # Until the browser step fills the page for you: everything to copy, in page order.
+    return questions, plan.filled
+
+
+def _print_form_answers(questions, by_field: dict[str, str], letter: str) -> None:
+    """Everything to copy by hand, in page order (when the browser can't fill it)."""
     console.print("\n[bold]Answers for this form[/] (the letter goes in the last box):")
-    for label, answer in filled.items():
-        if answer != letter:
-            console.print(Text(f"  {label}: ", style="dim") + Text(answer))
-    return filled
+    for q in questions:
+        answer = by_field.get(q.field)
+        if answer and answer != letter:
+            console.print(Text(f"  {q.label}: ", style="dim") + Text(answer))
+
+
+def _fill_in_browser(p, questions, by_field: dict[str, str], letter: str) -> bool:
+    """Open the form in Chrome, fill it, and ask (while it's still open) whether you
+    submitted. If the browser can't start, you get the answers to copy instead."""
+    from jobagent.apply.browser import open_and_fill
+    from jobagent.apply.forms import lever_apply_url
+    from jobagent.match.cv import CV_FILES, DEFAULT_CV_DIR
+
+    cv_path = DEFAULT_CV_DIR / CV_FILES[p["cv"]]
+
+    def hand_over(result) -> bool:
+        console.print(f"[green]Filled {len(result.filled)} field(s) in the browser.[/]")
+        for failed in result.failed:
+            console.print(Text(f"  ✗ fill this yourself: {failed}", style="yellow"))
+        console.print(
+            "[bold]Check every field in the browser, then click Submit yourself.[/]"
+        )
+        return typer.confirm("Did you submit the application?", default=False)
+
+    try:
+        return open_and_fill(
+            lever_apply_url(p["url"]), questions, by_field, cv_path, hand_over
+        )
+    except Exception as e:  # noqa: BLE001 (no browser: fall back to copying by hand)
+        console.print(f"[yellow]Couldn't open the browser ({e}).[/]")
+        _print_form_answers(questions, by_field, letter)
+        _copy_to_clipboard(letter)
+        typer.launch(p["url"])
+        return typer.confirm("Did you submit the application?", default=False)
 
 
 @apply_app.command("review")
@@ -1430,16 +1462,28 @@ def apply_review() -> None:
             )
             done["rejected"] += 1
             continue
-        form_answers = _complete_form(conn, p, letter, answers)
-        copied = _copy_to_clipboard(letter)
-        console.print(
-            "Letter copied to the clipboard. " if copied else "Copy the letter above. "
-        )
-        typer.launch(p["url"])
-        if typer.confirm("Did you submit the application?", default=False):
+        form = _complete_form(conn, p, letter, answers)
+        if form is not None:
+            submitted = _fill_in_browser(p, *form, letter)
+        else:
+            copied = _copy_to_clipboard(letter)
+            console.print(
+                "Letter copied to the clipboard. "
+                if copied
+                else "Copy the letter above. "
+            )
+            typer.launch(p["url"])
+            submitted = typer.confirm("Did you submit the application?", default=False)
+        if submitted:
             # The record of what was sent: the whole form if it was read, else the
             # screening answers you'd have copied from the list above.
-            sent_answers = form_answers or {k: answers.values[k] for k in QUESTIONS}
+            if form is not None:
+                questions, by_field = form
+                sent_answers = {
+                    q.label: by_field[q.field] for q in questions if q.field in by_field
+                }
+            else:
+                sent_answers = {k: answers.values[k] for k in QUESTIONS}
             mark_sent(
                 conn,
                 p,
