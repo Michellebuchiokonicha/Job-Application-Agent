@@ -796,10 +796,12 @@ def mark_sent(
     return app_id
 
 
-def delete_prepared_packs(conn: sqlite3.Connection) -> int:
-    """Drop packs not yet sent, so they're drafted again. Sent ones are a record: kept."""
+def delete_prepared_packs(conn: sqlite3.Connection, flagged_only: bool = False) -> int:
+    """Drop packs not yet sent, so they're drafted again. Sent ones are a record: kept.
+    With flagged_only, just the letters whose checks found problems."""
+    flagged = " AND problems_json != '[]'" if flagged_only else ""
     return conn.execute(
-        "DELETE FROM application_packs WHERE status = 'prepared'"
+        f"DELETE FROM application_packs WHERE status = 'prepared'{flagged}"
     ).rowcount
 
 

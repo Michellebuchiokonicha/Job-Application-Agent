@@ -1112,6 +1112,10 @@ def apply_prepare(
     redo: Annotated[
         bool, typer.Option(help="Redraft letters not yet sent (sent ones are kept).")
     ] = False,
+    redo_flagged: Annotated[
+        bool,
+        typer.Option(help="Redraft only unsent letters the checks flagged."),
+    ] = False,
 ) -> None:
     """Draft a cover letter for every tier A (70+) and B (50-69) job. Nothing is sent."""
     import json
@@ -1122,8 +1126,9 @@ def apply_prepare(
 
     settings = Settings.from_env()
     conn = _open_db(settings)
-    if redo:
-        console.print(f"Redrafting {delete_prepared_packs(conn)} unsent letter(s).")
+    if redo or redo_flagged:
+        n = delete_prepared_packs(conn, flagged_only=redo_flagged and not redo)
+        console.print(f"Redrafting {n} unsent letter(s).")
     skipped: Counter = Counter()
     todo = []
     for row in jobs_to_prepare(conn):
@@ -1296,16 +1301,44 @@ def _ask_question(q) -> str | None:
         console.print("Pick one number.")
 
 
+def _fetch_form_json(url: str) -> dict:
+    """A job's questions from a public ATS API. A separate function so tests can swap it."""
+    import httpx
+
+    from jobagent.sources.base import USER_AGENT
+
+    response = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def _read_form(p):
+    """(questions, the form's page) for a job whose form can be read, else None."""
+    from jobagent.apply.forms import (
+        greenhouse_urls,
+        lever_apply_url,
+        parse_greenhouse_questions,
+        parse_lever_form,
+    )
+
+    if p["source"] == "lever":
+        url = lever_apply_url(p["url"])
+        return parse_lever_form(_fetch_form_html(url)), url
+    if p["source"] == "greenhouse":
+        api, url = greenhouse_urls(p["external_id"])
+        return parse_greenhouse_questions(_fetch_form_json(api)), url
+    return None
+
+
 def _complete_form(conn, p, letter: str, answers):
-    """For a job with a readable form (Lever, for now): fill what's known, ask you the
-    rest, save your answers for next time. Returns (questions, {field: answer}), or None
-    if the form couldn't be read (then you fill it on the page, as before)."""
-    from jobagent.apply.fill import plan_form, question_key
-    from jobagent.apply.forms import lever_apply_url, parse_lever_form
+    """For a job with a readable form (Lever, Greenhouse): fill what's known, ask you the
+    rest, save your answers for next time. Returns (questions, {field: answer}, form
+    page), or None if the form can't be read (then you fill it on the page, as before)."""
+    from jobagent.apply.fill import LETTER_FIELDS, plan_form, question_key
     from jobagent.apply.profile import ProfileError, load_profile
     from jobagent.core.store import save_answer, saved_answers
 
-    if p["source"] != "lever":
+    if p["source"] not in ("lever", "greenhouse"):
         return None
     try:
         profile = load_profile()
@@ -1313,14 +1346,14 @@ def _complete_form(conn, p, letter: str, answers):
         console.print(Text(str(e), style="yellow"))
         return None
     try:
-        questions = parse_lever_form(_fetch_form_html(lever_apply_url(p["url"])))
+        questions, form_url = _read_form(p)
     except Exception as e:  # noqa: BLE001 (any failure: fall back to the page)
         console.print(f"[yellow]Couldn't read the form ({e}); fill it on the page.[/]")
         return None
 
     plan = plan_form(questions, profile, answers, saved_answers(conn), letter)
     console.print(
-        f"[green]Form: {len(plan.filled) - ('comments' in plan.filled)} answered from "
+        f"[green]Form: {sum(f not in LETTER_FIELDS for f in plan.filled)} answered from "
         "your profile, answers and earlier forms[/] (plus the letter) · "
         f"[yellow]{len(plan.needs_you)} need you[/]"
     )
@@ -1331,7 +1364,7 @@ def _complete_form(conn, p, letter: str, answers):
             continue
         save_answer(conn, question_key(q.label), q.label, answer)
         plan.filled[q.field] = answer
-    return questions, plan.filled
+    return questions, plan.filled, form_url
 
 
 def _print_form_answers(questions, by_field: dict[str, str], letter: str) -> None:
@@ -1343,11 +1376,12 @@ def _print_form_answers(questions, by_field: dict[str, str], letter: str) -> Non
             console.print(Text(f"  {q.label}: ", style="dim") + Text(answer))
 
 
-def _fill_in_browser(p, questions, by_field: dict[str, str], letter: str) -> bool:
+def _fill_in_browser(
+    p, questions, by_field: dict[str, str], form_url: str, letter: str
+) -> bool:
     """Open the form in Chrome, fill it, and ask (while it's still open) whether you
     submitted. If the browser can't start, you get the answers to copy instead."""
     from jobagent.apply.browser import open_and_fill
-    from jobagent.apply.forms import lever_apply_url
     from jobagent.match.cv import CV_FILES, DEFAULT_CV_DIR
 
     cv_path = DEFAULT_CV_DIR / CV_FILES[p["cv"]]
@@ -1363,13 +1397,13 @@ def _fill_in_browser(p, questions, by_field: dict[str, str], letter: str) -> boo
 
     try:
         return open_and_fill(
-            lever_apply_url(p["url"]), questions, by_field, cv_path, hand_over
+            form_url, questions, by_field, cv_path, hand_over, ats=p["source"]
         )
     except Exception as e:  # noqa: BLE001 (no browser: fall back to copying by hand)
         console.print(f"[yellow]Couldn't open the browser ({e}).[/]")
         _print_form_answers(questions, by_field, letter)
         _copy_to_clipboard(letter)
-        typer.launch(p["url"])
+        typer.launch(form_url)
         return typer.confirm("Did you submit the application?", default=False)
 
 
@@ -1464,7 +1498,8 @@ def apply_review() -> None:
             continue
         form = _complete_form(conn, p, letter, answers)
         if form is not None:
-            submitted = _fill_in_browser(p, *form, letter)
+            questions, by_field, form_url = form
+            submitted = _fill_in_browser(p, questions, by_field, form_url, letter)
         else:
             copied = _copy_to_clipboard(letter)
             console.print(
@@ -1478,7 +1513,6 @@ def apply_review() -> None:
             # The record of what was sent: the whole form if it was read, else the
             # screening answers you'd have copied from the list above.
             if form is not None:
-                questions, by_field = form
                 sent_answers = {
                     q.label: by_field[q.field] for q in questions if q.field in by_field
                 }

@@ -26,21 +26,26 @@ def _css(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _upload_cv(page, selector: str, cv_path: Path | None, result: FillResult) -> None:
+    if cv_path is None:
+        return
+    try:
+        page.set_input_files(selector, str(cv_path))
+        result.filled.append("Resume/CV")
+    except Exception as e:  # noqa: BLE001 (any failure: named, left for you)
+        result.failed.append(f"Resume/CV ({type(e).__name__})")
+
+
 def fill_lever_form(
     page, questions: list[Question], answers: dict[str, str], cv_path: Path | None
 ) -> FillResult:
     """Put each answer in its field on an open Lever form. `answers` is by field name.
 
-    `page` is a Playwright Page (tests pass a fake with the same methods).
+    Lever uses plain HTML fields, found by their name attribute. `page` is a Playwright
+    Page (tests pass a fake with the same methods).
     """
     result = FillResult()
-    if cv_path is not None:
-        try:
-            page.set_input_files('input[name="resume"]', str(cv_path))
-            result.filled.append("Resume/CV")
-        except Exception as e:  # noqa: BLE001 (any failure: named, left for you)
-            result.failed.append(f"Resume/CV ({type(e).__name__})")
-
+    _upload_cv(page, 'input[name="resume"]', cv_path, result)
     for q in questions:
         answer = answers.get(q.field)
         if not answer or q.kind == "file":
@@ -62,12 +67,45 @@ def fill_lever_form(
     return result
 
 
+def fill_greenhouse_form(
+    page, questions: list[Question], answers: dict[str, str], cv_path: Path | None
+) -> FillResult:
+    """Put each answer in its field on an open Greenhouse form. `answers` is by field name.
+
+    Each field's id is its API name. Choice questions are searchable dropdowns: click,
+    type the answer, then click the option whose text is exactly the answer.
+    """
+    result = FillResult()
+    _upload_cv(page, 'input[id="resume"]', cv_path, result)
+    for q in questions:
+        answer = answers.get(q.field)
+        if not answer or q.kind == "file":
+            continue
+        selector = f'[id="{_css(q.field)}"]'
+        try:
+            if q.kind in ("dropdown", "multiple-select"):
+                for part in answer.split(MULTI_SEPARATOR):
+                    page.click(selector)
+                    page.fill(selector, part)
+                    page.get_by_role("option", name=part, exact=True).first.click()
+            else:
+                page.fill(selector, answer)
+            result.filled.append(q.label)
+        except Exception as e:  # noqa: BLE001
+            result.failed.append(f"{q.label} ({type(e).__name__})")
+    return result
+
+
+FILLERS = {"lever": fill_lever_form, "greenhouse": fill_greenhouse_form}
+
+
 def open_and_fill(
     url: str,
     questions: list[Question],
     answers: dict[str, str],
     cv_path: Path | None,
     hand_over: Callable[[FillResult], bool],
+    ats: str = "lever",
 ) -> bool:
     """Open the form in Chrome, fill it, then hand over to you. The browser stays open
     until `hand_over` returns (it asks whether you submitted); returns its answer."""
@@ -80,7 +118,7 @@ def open_and_fill(
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded")
             page.set_default_timeout(FIELD_TIMEOUT_MS)
-            result = fill_lever_form(page, questions, answers, cv_path)
+            result = FILLERS[ats](page, questions, answers, cv_path)
             return hand_over(result)
         finally:
             browser.close()

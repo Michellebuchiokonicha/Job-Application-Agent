@@ -56,6 +56,34 @@ def fits(q: Question, answer: str) -> bool:
     return all(part in q.options for part in parts)
 
 
+# Where the cover letter goes: Lever's free-text box, Greenhouse's typed cover letter.
+LETTER_FIELDS = {"comments", "cover_letter_text"}
+
+# Profile links asked as ordinary questions (Greenhouse, Ashby): by words in the label.
+_PROFILE_LABELS = [
+    (("linkedin",), "linkedin"),
+    (("github",), "github"),
+    (("portfolio", "personal website", "website"), "portfolio"),
+]
+
+
+def _profile_answer(q: Question, profile: dict[str, str]) -> str | None:
+    """Contact details, whether the form names the field or only labels it."""
+    name = profile.get("name", "").split()
+    if q.field == "first_name":
+        return name[0] if name else None
+    if q.field == "last_name":
+        return " ".join(name[1:]) or None
+    if q.field in PROFILE_FIELDS:
+        return profile.get(PROFILE_FIELDS[q.field]) or None
+    if q.kind == "text":
+        label = q.label.lower()
+        for words, key in _PROFILE_LABELS:
+            if any(w in label for w in words):
+                return profile.get(key) or None
+    return None
+
+
 def known_answer(
     q: Question,
     profile: dict[str, str],
@@ -67,8 +95,10 @@ def known_answer(
     Sources, in order: your profile, your screening answers, then answers you gave to
     the same question on an earlier form (`saved`, by question_key).
     """
-    if q.field in PROFILE_FIELDS:
-        return profile.get(PROFILE_FIELDS[q.field]) or None
+    if (from_profile := _profile_answer(q, profile)) is not None:
+        return from_profile
+    if q.field in PROFILE_FIELDS or q.field in {"first_name", "last_name"}:
+        return None  # a contact field you left empty in your profile
 
     label = q.label.lower()
     candidates = []
@@ -100,14 +130,14 @@ def plan_form(
     letter: str,
 ) -> FormPlan:
     """Sort a form into what's filled, what needs you, and optional fields left empty.
-    The CV upload is handled by the browser step; the letter goes in the comments box."""
+    The CV upload is handled by the browser step; the letter goes in the cover letter box."""
     plan = FormPlan()
     for q in questions:
         if q.kind == "file":
             continue
         answer = (
             letter
-            if q.field == "comments"
+            if q.field in LETTER_FIELDS
             else known_answer(q, profile, answers, saved)
         )
         if answer:

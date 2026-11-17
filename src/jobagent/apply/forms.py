@@ -6,6 +6,9 @@ only you can answer are asked once, in review, not discovered halfway through a 
 Lever's apply page is public HTML. Standard fields (name, email, CV...) are plain inputs.
 Each block of custom questions carries its own definition as JSON (question text, type,
 options) in a hidden "baseTemplate" input, so nothing needs to run in a browser to read it.
+
+Greenhouse is simpler still: its public job API returns the questions as JSON
+(`?questions=true`), and the rendered form uses each field's name as the element's id.
 """
 
 import json
@@ -68,4 +71,50 @@ def parse_lever_form(html: str) -> list[Question]:
                 "comments", "Additional information (cover letter)", "textarea", False
             )
         )
+    return questions
+
+
+# ---- Greenhouse ------------------------------------------------------------------------
+
+# Greenhouse's field types -> ours. Its choice questions render as searchable dropdowns.
+_GREENHOUSE_KINDS = {
+    "input_text": "text",
+    "textarea": "textarea",
+    "input_file": "file",
+    "input_hidden": "hidden",
+    "multi_value_single_select": "dropdown",
+    "multi_value_multi_select": "multiple-select",
+}
+# Typed alternatives to an upload: the CV is always uploaded, and the letter goes in
+# cover_letter_text where a form offers it (see fill.LETTER_FIELDS).
+_TYPED_ALTERNATIVES = {"resume_text"}
+
+
+def greenhouse_urls(external_id: str) -> tuple[str, str]:
+    """(questions API, form page) for a Greenhouse job stored as "<slug>:<id>". The form
+    page is Greenhouse's own, not the company's site, where it may sit in an iframe."""
+    slug, job_id = external_id.split(":", 1)
+    return (
+        f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}?questions=true",
+        f"https://job-boards.greenhouse.io/{slug}/jobs/{job_id}",
+    )
+
+
+def parse_greenhouse_questions(data: dict) -> list[Question]:
+    """Every question in a Greenhouse job's API response, in form order."""
+    questions: list[Question] = []
+    for q in data.get("questions") or []:
+        for f in q.get("fields") or []:
+            kind = _GREENHOUSE_KINDS.get(f.get("type", ""), "text")
+            if kind == "hidden" or f.get("name") in _TYPED_ALTERNATIVES:
+                continue
+            questions.append(
+                Question(
+                    field=f["name"],
+                    label=(q.get("label") or "").strip(),
+                    kind=kind,
+                    required=bool(q.get("required")),
+                    options=tuple(v.get("label", "") for v in f.get("values") or []),
+                )
+            )
     return questions

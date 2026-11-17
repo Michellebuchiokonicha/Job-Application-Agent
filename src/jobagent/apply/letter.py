@@ -36,7 +36,7 @@ Write a cover letter from the candidate whose CV is below, for the job below.
 Rules:
 - Start with "Dear Hiring Manager," and then, with no heading or title line, open with: \
 "I'm applying for the {title} role at {company}." Follow it with one sentence on the \
-piece of CV work that best matches the most important requirement in THIS ad.
+piece of CV work most relevant to this job: what you did and where, nothing more.
 - {paragraphs} short paragraphs, at most {words} words in total. Plain text: no subject \
 line, no addresses, no date. End with "Kind regards," and then {name} on its own line.
 - Write as the candidate, in the first person ("I"). Never use the candidate's name \
@@ -52,8 +52,8 @@ claim the bullet doesn't make. A skill that's only in the CV's skills list is no
 hands-on experience.
 - If the ad asks for something the CV doesn't show, leave it out completely. Never write \
 that the candidate has it.
-- Let the examples speak: don't say how the experience "aligns with" or "meets" the \
-requirements. Vary sentence openings; don't start sentences with "I have".
+- Let the examples speak for themselves: never add a sentence explaining how they \
+relate to the job. Vary sentence openings; don't start sentences with "I have".
 - UK English, plain and confident. No clichés such as "I am writing to express my \
 interest", "I am excited to apply" or "passionate about".
 - Never use an em dash or an en dash between clauses. Use commas, colons or full stops.
@@ -119,7 +119,17 @@ _CLICHES = (
     "perfect fit",
     "proven track record",
     "passionate about",
+    # Explaining instead of showing: the model echoing the prompt's own words.
+    "the requirement",
+    "the need for",
+    "directly addresses",
+    "directly supports",
+    "this experience covers",
+    "this mirrors",
+    "this shows my ability",
 )
+# The opening the prompt fixes. Code wrote it, so the model doesn't check it.
+_OPENING = re.compile(r"I(?:'m|’m| am) applying for the ")
 
 
 def _sentence_starts(text: str) -> set[int]:
@@ -150,7 +160,9 @@ def check_letter(
     warnings: list[str] = []
     if not letter.strip():
         return ["the letter is empty"], []
-    if _DASH.search(letter):
+    # A dash inside the job title or company name ("Engineer – Vision") isn't the
+    # letter's own writing.
+    if _DASH.search(letter.replace(title, "").replace(company, "")):
         problems.append("uses a dash (— or –) between clauses: reads as AI-written")
     if m := _PLACEHOLDER.search(letter):
         problems.append(f"has a placeholder: {m.group()}")
@@ -286,7 +298,7 @@ class LetterWriter:
 
     def unsupported(self, letter: str, cv: str) -> list[str] | None:
         """Sentences the CV doesn't back, or None if the check couldn't run."""
-        sentences = letter_sentences(letter)
+        sentences = [t for t in letter_sentences(letter) if not _OPENING.match(t)]
         if not sentences:
             return []
         numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(sentences, start=1))

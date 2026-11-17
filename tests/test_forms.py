@@ -4,8 +4,13 @@ import html
 import json
 from pathlib import Path
 
-from jobagent.apply.browser import fill_lever_form
-from jobagent.apply.forms import Question, lever_apply_url, parse_lever_form
+from jobagent.apply.browser import fill_greenhouse_form, fill_lever_form
+from jobagent.apply.forms import (
+    Question,
+    lever_apply_url,
+    parse_greenhouse_questions,
+    parse_lever_form,
+)
 
 
 def _card(card_id: str, fields: list[dict]) -> str:
@@ -112,6 +117,22 @@ class FakePage:
     def set_input_files(self, selector, path):
         self._do("upload", selector, path)
 
+    def click(self, selector):
+        self._do("click", selector)
+
+    def get_by_role(self, role, name, exact):
+        page = self
+
+        class Option:
+            @property
+            def first(self):
+                return self
+
+            def click(self):
+                page._do("pick", f"{role}={name}", exact)
+
+        return Option()
+
 
 QS = [
     Question("name", "Full name", "text", True),
@@ -164,4 +185,52 @@ def test_quotes_in_an_answer_cannot_break_the_selector():
     fill_lever_form(page, [q], {q.field: 'Say "yes"'}, None)
     assert page.calls == [
         ("check", 'input[name="cards[b][field0]"][value="Say \\"yes\\""]', None)
+    ]
+
+
+def test_greenhouse_dropdowns_are_searched_then_the_exact_option_clicked():
+    qs = [
+        Question("first_name", "First Name", "text", True),
+        Question("question_9", "Heard?", "dropdown", True, ("Job board", "Other")),
+    ]
+    page = FakePage()
+    answers = {"first_name": "Ada", "question_9": "Other"}
+    result = fill_greenhouse_form(page, qs, answers, Path("/cv/ai.pdf"))
+    assert page.calls == [
+        ("upload", 'input[id="resume"]', "/cv/ai.pdf"),
+        ("fill", '[id="first_name"]', "Ada"),
+        ("click", '[id="question_9"]', None),
+        ("fill", '[id="question_9"]', "Other"),
+        ("pick", "option=Other", True),  # exact text, never the nearest
+    ]
+    assert result.failed == []
+
+
+def test_greenhouse_questions_from_the_api():
+    data = {
+        "questions": [
+            {
+                "label": "Resume/CV",
+                "required": True,
+                "fields": [
+                    {"name": "resume", "type": "input_file"},
+                    {"name": "resume_text", "type": "textarea"},
+                ],
+            },
+            {
+                "label": "Sponsorship?",
+                "required": True,
+                "fields": [
+                    {
+                        "name": "question_1",
+                        "type": "multi_value_single_select",
+                        "values": [{"label": "Yes"}, {"label": "No"}],
+                    }
+                ],
+            },
+        ]
+    }
+    assert parse_greenhouse_questions(data) == [
+        Question("resume", "Resume/CV", "file", True),  # the typed CV box is skipped
+        Question("question_1", "Sponsorship?", "dropdown", True, ("Yes", "No")),
     ]

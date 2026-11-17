@@ -687,3 +687,22 @@ not skipped. If Chrome can't start, the answers are printed to copy instead.
 Tests never open a browser: the filler takes the page as a parameter, so tests pass a
 fake page that records each action, and a shared fixture blocks the real browser. (One
 early run took 12 seconds instead of 1: the tests were launching Chrome.)
+
+## The prompt's own words, back in 93 letters
+
+A prompt line asked for "one sentence on the piece of CV work that best matches the most
+important requirement in THIS ad". The model obliged literally: "...directly matches the
+need for hands-on experience", "...directly addresses the need for rigorous evaluation".
+The filler check only knew "aligns with", so 60 letters with this sentence passed as
+clean, on top of 33 flagged. A rule that names what to avoid ("don't say 'aligns
+with'") had the same effect: the model used the phrase.
+
+Fixes: the prompt now describes what to write (what you did and where) without the
+words "match", "requirement" or "need"; the filler check catches "the requirement",
+"the need for", "directly addresses" and similar; the fixed opening sentence is no longer
+sent to the model check (it kept being flagged as unsupported); a dash inside the job
+title no longer counts as the letter's dash. And `apply prepare --redo-flagged` redrafts
+only flagged letters, for next time.
+
+Lesson, third time today: a small model copies the prompt's wording, including the words
+in "don't" rules. Before trusting a check, run it over the outputs it already passed.

@@ -589,8 +589,8 @@ def test_approve_fills_the_form_in_the_browser_and_records_it(lever_env, monkeyp
     conn = lever_env
     seen = {}
 
-    def fake_open_and_fill(url, questions, answers, cv_path, hand_over):
-        seen.update(url=url, answers=answers, cv=cv_path.name)
+    def fake_open_and_fill(url, questions, answers, cv_path, hand_over, ats):
+        seen.update(url=url, answers=answers, cv=cv_path.name, ats=ats)
         return hand_over(browser_module.FillResult(filled=["Full name"]))
 
     monkeypatch.setattr(browser_module, "open_and_fill", fake_open_and_fill)
@@ -600,6 +600,7 @@ def test_approve_fills_the_form_in_the_browser_and_records_it(lever_env, monkeyp
         .output
     )
     assert seen["url"].endswith("/apply") and seen["cv"] == "cv_ai_engineer.pdf"
+    assert seen["ats"] == "lever"
     assert seen["answers"]["name"] == "Ada Example"
     assert seen["answers"]["comments"].startswith("Dear Hiring Manager")  # the letter
     assert "click Submit yourself" in out and "Sent 1" in out
@@ -618,3 +619,126 @@ def test_no_browser_falls_back_to_copying_by_hand(lever_env):
     )
     assert "Couldn't open the browser" in out and "Answers for this form" in out
     assert "Sent 1" in out
+
+
+GREENHOUSE_API = {
+    "questions": [
+        {
+            "label": "First Name",
+            "required": True,
+            "fields": [{"name": "first_name", "type": "input_text"}],
+        },
+        {
+            "label": "Last Name",
+            "required": True,
+            "fields": [{"name": "last_name", "type": "input_text"}],
+        },
+        {
+            "label": "Resume/CV",
+            "required": True,
+            "fields": [
+                {"name": "resume", "type": "input_file"},
+                {"name": "resume_text", "type": "textarea"},
+            ],
+        },
+        {
+            "label": "LinkedIn Profile",
+            "required": False,
+            "fields": [{"name": "question_2", "type": "input_text"}],
+        },
+        {
+            "label": HEARD,
+            "required": True,
+            "fields": [
+                {
+                    "name": "question_1",
+                    "type": "multi_value_single_select",
+                    "values": [
+                        {"label": "Job board", "value": 1},
+                        {"label": "Other", "value": 2},
+                    ],
+                }
+            ],
+        },
+    ]
+}
+
+
+def test_greenhouse_form_is_read_from_the_api_and_filled(env, tmp_path, monkeypatch):
+    conn, _ = env
+    conn.execute(
+        "UPDATE jobs SET source = 'greenhouse', external_id = 'acme:77' "
+        "WHERE external_id = '1'"
+    )
+    profile = tmp_path / "profile.toml"
+    profile.write_text(
+        'name = "Ada Example"\nlinkedin = "https://linkedin.com/in/ada"\n'
+    )
+    monkeypatch.setattr(profile_module, "DEFAULT_PROFILE_PATH", profile)
+    asked = []
+    monkeypatch.setattr(
+        cli, "_fetch_form_json", lambda url: asked.append(url) or GREENHOUSE_API
+    )
+    seen = {}
+
+    def fake_open_and_fill(url, questions, answers, cv_path, hand_over, ats):
+        seen.update(url=url, answers=answers, ats=ats)
+        return hand_over(browser_module.FillResult())
+
+    monkeypatch.setattr(browser_module, "open_and_fill", fake_open_and_fill)
+    CliRunner().invoke(cli.app, ["apply", "prepare"])
+    out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\n1\ny\nq\n").output
+    assert asked == [
+        "https://boards-api.greenhouse.io/v1/boards/acme/jobs/77?questions=true"
+    ]
+    assert seen["url"] == "https://job-boards.greenhouse.io/acme/jobs/77"
+    assert seen["ats"] == "greenhouse"
+    assert seen["answers"] == {
+        "first_name": "Ada",
+        "last_name": "Example",
+        "question_2": "https://linkedin.com/in/ada",  # profile link, found by its label
+        "question_1": "Job board",  # asked once, picked by number
+    }
+    assert "Sent 1" in out
+
+
+# --- Letter fixes: prompt echo, the fixed opening, dashes in titles, flagged-only redo ---
+
+
+def test_explaining_how_work_matches_the_job_is_filler():
+    problems, _ = check(letter("My Python work matches the requirement for RAG."))
+    assert any("the requirement" in p for p in problems)
+
+
+def test_a_dash_in_the_job_title_is_not_the_letter_writing():
+    text = (
+        "Dear Hiring Manager,\n\nI'm applying for the AI Engineer – Vision role at "
+        "Beta Labs. I built RAG pipelines.\n\nKind regards,\nAda Example"
+    )
+    problems, _ = check_letter(text, CV, AD, "AI Engineer – Vision", "Beta Labs", 250)
+    assert not any("dash" in p for p in problems)
+
+
+def test_the_fixed_opening_is_never_sent_to_the_model_check():
+    seen = []
+
+    class Client:
+        def chat(self, model, messages, **kw):
+            seen.append(messages[-1]["content"])
+            return {"message": {"content": '{"sentences": []}'}, "done_reason": "stop"}
+
+    LetterWriter(Client(), "m").unsupported(letter("I built RAG pipelines."), CV)
+    assert "applying for the" not in seen[0] and "I built RAG pipelines." in seen[0]
+
+
+def test_redo_flagged_redrafts_only_the_flagged_letters(env):
+    conn, writer = env
+    CliRunner().invoke(cli.app, ["apply", "prepare"])
+    conn.execute(
+        """UPDATE application_packs SET problems_json = '["x"]'
+           WHERE external_id = '2'"""
+    )
+    writer.calls.clear()
+    out = CliRunner().invoke(cli.app, ["apply", "prepare", "--redo-flagged"]).output
+    assert "Redrafting 1 unsent letter(s)" in out
+    assert writer.calls == [("ML Engineer", "B")]
