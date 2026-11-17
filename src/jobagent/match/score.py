@@ -22,14 +22,17 @@ from pydantic import BaseModel, Field, ValidationError
 from jobagent.inbox.classify import ChatClient
 from jobagent.match.filters import based_abroad
 
-PROMPT_VERSION = "v7"  # v7: second look for proof in experience and projects
+PROMPT_VERSION = "v8"  # v8: at most 40 requirements, all from the ad
 MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
 NUM_CTX = 16384
-# Guards against a looping model (it once ran 5 hours on one job). A real answer is well
-# under 2k tokens, so hitting the output cap means a loop; the timeout catches the rest.
+# Guards against a runaway model (it once ran 5 hours on one job). Hitting the output cap
+# means a loop, or drifting from the ad into listing the whole CV; the timeout catches the rest.
 NUM_PREDICT = 4096
+# One requirement is ~55 tokens of JSON, so 40 is ~2,200: room left for the rest of the
+# answer. Real ads have 15-30; more means the model is listing the CV, not the ad.
+MAX_REQUIREMENTS = 40
 MODEL_TIMEOUT = 300  # seconds per call
 
 
@@ -45,7 +48,9 @@ tool per item: split lists, so "CI/CD, observability and infrastructure as code"
 requirements. job_quote: the shortest exact words from the ad that name that one thing \
 (e.g. "infrastructure as code"). Mark essential = false for "nice to have", "ideally", \
 "bonus", "desirable".
-   Do NOT list location, hybrid/remote, contract type, salary or benefits as requirements.
+    Do NOT list location, hybrid/remote, contract type, salary or benefits as requirements.
+   List only what the job ad asks for. Never list a skill just because the CV has it.
+
 2. For each requirement decide met = true only if the CV shows THE SAME skill or \
 experience. A related but different skill does not count (e.g. building an edtech app is \
 not "integration with ERP/CRM systems"). If unsure, met = false.
@@ -117,7 +122,7 @@ class Verification(BaseModel):
 class FitAssessment(BaseModel):
     # No summary from the model: it was written before verification and could contradict
     # the final result ("meets all essentials" next to six missing). Code writes it instead.
-    requirements: list[Requirement]
+    requirements: list[Requirement] = Field(max_length=MAX_REQUIREMENTS)
     dealbreakers: list[str]
     concerns: list[str]
 
@@ -544,7 +549,9 @@ class FitScorer:
         except httpx.TimeoutException:
             raise ModelStuck(f"no answer within {MODEL_TIMEOUT}s") from None
         if response.get("done_reason") == "length":
-            raise ModelStuck(f"answer cut off at {NUM_PREDICT} tokens (model looping)")
+            raise ModelStuck(
+                f"answer cut off at {NUM_PREDICT} tokens (looping, or listing the CV)"
+            )
         return response["message"]["content"]
 
     def score(self, title: str, company: str, description: str, cv: str) -> Fit | None:
