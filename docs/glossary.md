@@ -188,3 +188,9 @@ where they appear in this project. Grouped by topic; newest additions at the end
 **Default argument evaluated at definition time**: In Python, `def f(path=DEFAULT)` reads `DEFAULT` once, when the function is defined, not each time it's called. Changing `DEFAULT` later (e.g. in a test) has no effect. Use `path=None` and fill in the default inside the function. The same rule is behind the classic `def f(items=[])` bug, where one list is shared across calls.
 
 **Grounded generation**: Model output that must trace back to given source material (here, the CV and the job ad), with code checking the traceable parts (numbers, names) rather than trusting the model's promise to stick to the facts.
+
+**Anti-join**: Finding rows in one table with no match in another: `LEFT JOIN` the second table, then keep rows `WHERE other.id IS NULL`. Used here to find jobs that have an ad but no score. (`IS NULL`, never `= NULL`: in SQL, `NULL = NULL` is unknown, not true.)
+
+**Constrained decoding (schema limits)**: With structured output, the model can only produce text that fits the JSON schema; the server blocks every other token. So a schema limit like `maxItems` (Pydantic `Field(max_length=...)` on a list) is enforced *while* the answer is written, not checked afterwards.
+
+**Drift**: A model sliding from the task into nearby material in its prompt, e.g. from listing a job's requirements into listing every skill in the CV. Different from a loop: the output keeps changing, so repetition checks miss it.

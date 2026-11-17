@@ -598,3 +598,30 @@ What had to change, because these boards are worldwide and Reed is UK-only:
 A testing lesson: when `jobs fetch` started reading the boards by default, the existing
 fetch tests began calling 53 real APIs and the suite hung. A shared autouse fixture now
 swaps in a fake boards client for every test: tests never touch the network.
+
+## The 14 cut-off scores weren't loops: the model was listing the CV
+
+After adding company boards, 14 of 115 jobs failed to score with "answer cut off at 4096
+tokens (model looping)". That message was a guess, and the text that would have proved it
+was thrown away.
+
+**First hypothesis: the ad was truncated.** The scorer only shows the model the first 8,000
+characters of an ad (to keep ad, CV and answer inside the context window). A SQL anti-join
+(jobs with details but no score) checked it: only 2 of the 14 ads were over 8,000
+characters, and one of those by 44. Truncation couldn't explain the other 12.
+
+**Then: keep the answer and read it.** A diagnostic script (`scripts/diagnose_cutoff.py`)
+repeats the scorer's exact call for one job but keeps the raw reply. For one job: 76
+"requirements", 69 of them distinct, so not a loop. But YOLO, Mask R-CNN, U-Net and
+Terraform aren't in the ad at all; they're in the CV, and their `job_quote` was a CV
+heading or a single loose word ("Evaluation"). The model listed the ad's real requirements,
+ran out, and carried on through the CV's skills until it hit the cap.
+
+**Fix (prompt v8):** the schema now allows at most 40 requirements (`maxItems`, enforced by
+Ollama while generating, not checked afterwards), and the prompt says to list only what the
+ad asks for. Same job afterwards: 10 requirements, all quoted from the ad, 980 tokens,
+finished normally.
+
+**Still open:** the existing guard drops requirements whose quote isn't in the ad, but a
+one-word quote like "Evaluation" passes it, so v7 scores may include a few CV items. The
+lesson: an error message is a hypothesis. Keep the evidence it was based on.
