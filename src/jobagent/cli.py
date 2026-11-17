@@ -1135,8 +1135,6 @@ def apply_prepare(
             skipped["you rejected it"] += 1
         elif dealbreakers:
             skipped["a dealbreaker (e.g. US-based, clearance)"] += 1
-        else:
-            skipped["scored under 50"] += 1
     todo = todo[:limit] if limit else todo
     if not todo:
         console.print("Nothing to prepare: every eligible job already has a letter.")

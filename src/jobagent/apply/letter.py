@@ -26,11 +26,9 @@ def tier_for(
     """A (70+), B (50-69) or None (don't apply). Rejected or blocked jobs never get one."""
     if score is None or decision == "rejected" or dealbreakers:
         return None
-    if score >= TIER_A_MIN:
-        return "A"
-    if score >= TIER_B_MIN:
-        return "B"
-    return None
+    # Every job that passed the title filter gets a letter: the score only sets its length.
+    return "A" if score >= TIER_A_MIN else "B"
+
 
 
 LETTER_PROMPT = """\

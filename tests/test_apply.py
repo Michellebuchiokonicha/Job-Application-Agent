@@ -60,7 +60,8 @@ def check(text: str, max_words: int = 250):
         (70, [], None, "A"),
         (69, [], None, "B"),
         (50, [], None, "B"),
-        (49, [], None, None),
+        (49, [], None, "B"),
+        (5, [], None, "B"),
         (90, ["Based outside the UK"], None, None),
         (90, [], "rejected", None),
         (60, [], "accepted", "B"),
@@ -286,18 +287,22 @@ def env(tmp_path, monkeypatch):
     return conn, writer
 
 
-def test_prepare_writes_letters_for_tiers_a_and_b_only(env):
+def test_prepare_writes_letters_for_every_eligible_job(env):
     conn, writer = env
     out = CliRunner().invoke(cli.app, ["apply", "prepare"]).output
-    assert sorted(writer.calls) == [("AI Engineer", "A"), ("ML Engineer", "B")]
-    assert "Prepared 2: tier A 1" in out
-    assert (
-        "scored under 50: 1" in out and "dealbreaker" in out and "rejected it: 1" in out
-    )
-    assert pack_counts(conn) == {"prepared": 2}
+    assert sorted(writer.calls) == [
+        ("AI Engineer", "A"),
+        ("Data Scientist", "B"),
+        ("ML Engineer", "B"),
+    ]
+    assert "Prepared 3: tier A 1" in out
+    assert "dealbreaker" in out and "rejected it: 1" in out
+    assert "scored under 50" not in out  # a low score no longer blocks a letter
+    assert pack_counts(conn) == {"prepared": 3}
     # Idempotent: a second run has nothing new to do.
     again = CliRunner().invoke(cli.app, ["apply", "prepare"]).output
-    assert "Nothing to prepare" in again and len(writer.calls) == 2
+    assert "Nothing to prepare" in again and len(writer.calls) == 3
+
 
 
 def test_review_approve_and_confirm_records_exactly_what_was_sent(env):
@@ -436,9 +441,10 @@ def test_redo_redrafts_unsent_letters_but_keeps_sent_ones(env):
     CliRunner().invoke(cli.app, ["apply", "prepare"])
     CliRunner().invoke(cli.app, ["apply", "review"], input="a\ny\nq\n")  # send tier A
     out = CliRunner().invoke(cli.app, ["apply", "prepare", "--redo"]).output
-    assert "Redrafting 1 unsent letter(s)" in out
-    assert pack_counts(conn) == {"sent": 1, "prepared": 1}
-    assert writer.calls[-1] == ("ML Engineer", "B")
+    assert "Redrafting 2 unsent letter(s)" in out
+    assert pack_counts(conn) == {"sent": 1, "prepared": 2}
+    assert writer.calls[-1] == ("Data Scientist", "B")
+
 
 
 def test_model_sizes_are_not_names():
