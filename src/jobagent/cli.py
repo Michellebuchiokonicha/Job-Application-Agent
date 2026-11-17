@@ -1228,6 +1228,119 @@ def _print_pack(p, problems: list[str], warnings: list[str]) -> None:
         console.print(Text(f"  ! {warning}", style="yellow"))
 
 
+def _fetch_form_html(url: str) -> str:
+    """The job's public application page. A separate function so tests can swap it."""
+    import httpx
+
+    from jobagent.sources.base import USER_AGENT
+
+    response = httpx.get(
+        url, headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True
+    )
+    response.raise_for_status()
+    return response.text
+
+
+_SEARCH_OVER = (
+    15  # more options than this (e.g. 3,000 universities): search, don't list
+)
+
+
+def _ask_question(q) -> str | None:
+    """Ask one form question in the terminal. Empty input skips it (you'll fill it on
+    the page). Choices are picked by number, so the answer is always a real option."""
+    from jobagent.apply.fill import MULTI_SEPARATOR
+
+    console.print(Text(f"\n{q.label}", style="bold"))
+    if not q.options:
+        if q.kind == "textarea":
+            console.print(
+                "[dim]Your editor opens for a longer answer. Save and close.[/]"
+            )
+            text = _edit_text("")
+            return text.strip() if text and text.strip() else None
+        text = typer.prompt("Answer (Enter to skip)", default="", show_default=False)
+        return text.strip() or None
+
+    options = list(q.options)
+    while True:
+        shown = options
+        if len(options) > _SEARCH_OVER:
+            term = typer.prompt(
+                f"{len(options)} options: type part of yours (Enter to skip)",
+                default="",
+                show_default=False,
+            ).strip()
+            if not term:
+                return None
+            shown = [o for o in options if term.lower() in o.lower()][:_SEARCH_OVER]
+            if not shown:
+                console.print("No match. Try fewer letters.")
+                continue
+        for n, option in enumerate(shown, start=1):
+            console.print(f"  {n}. {option}", markup=False)
+        many = q.kind == "multiple-select"
+        hint = "numbers, comma-separated" if many else "number"
+        raw = typer.prompt(
+            f"Pick ({hint}; Enter to skip)", default="", show_default=False
+        )
+        if not raw.strip():
+            return None
+        try:
+            picks = [shown[int(x) - 1] for x in raw.split(",") if x.strip()]
+        except (ValueError, IndexError):
+            console.print(f"Type {hint} from the list.")
+            continue
+        if picks and (many or len(picks) == 1):
+            return MULTI_SEPARATOR.join(picks)
+        console.print("Pick one number.")
+
+
+def _complete_form(conn, p, letter: str, answers) -> dict[str, str] | None:
+    """For a job with a readable form (Lever, for now): fill what's known, ask you the
+    rest, save your answers for next time. Returns {question: answer}, or None if the
+    form couldn't be read (then you fill it on the page, as before)."""
+    from jobagent.apply.fill import plan_form, question_key
+    from jobagent.apply.forms import lever_apply_url, parse_lever_form
+    from jobagent.apply.profile import ProfileError, load_profile
+    from jobagent.core.store import save_answer, saved_answers
+
+    if p["source"] != "lever":
+        return None
+    try:
+        profile = load_profile()
+    except ProfileError as e:
+        console.print(Text(str(e), style="yellow"))
+        return None
+    try:
+        questions = parse_lever_form(_fetch_form_html(lever_apply_url(p["url"])))
+    except Exception as e:  # noqa: BLE001 (any failure: fall back to the page)
+        console.print(f"[yellow]Couldn't read the form ({e}); fill it on the page.[/]")
+        return None
+
+    plan = plan_form(questions, profile, answers, saved_answers(conn), letter)
+    labels = {q.field: q.label for q in questions}
+    console.print(
+        f"[green]Form: {len(plan.filled) - ('comments' in plan.filled)} answered from "
+        "your profile, answers and earlier forms[/] (plus the letter) · "
+        f"[yellow]{len(plan.needs_you)} need you[/]"
+    )
+    for q in plan.needs_you:
+        answer = _ask_question(q)
+        if answer is None:
+            console.print("[dim]Skipped: fill it on the page.[/]")
+            continue
+        save_answer(conn, question_key(q.label), q.label, answer)
+        plan.filled[q.field] = answer
+    filled = {labels.get(f, f): a for f, a in plan.filled.items()}
+    # Until the browser step fills the page for you: everything to copy, in page order.
+    console.print("\n[bold]Answers for this form[/] (the letter goes in the last box):")
+    for label, answer in filled.items():
+        if answer != letter:
+            console.print(Text(f"  {label}: ", style="dim") + Text(answer))
+    return filled
+
+
 @apply_app.command("review")
 def apply_review() -> None:
     """Approve each application, then send it yourself. Nothing is sent without you.
@@ -1317,17 +1430,21 @@ def apply_review() -> None:
             )
             done["rejected"] += 1
             continue
+        form_answers = _complete_form(conn, p, letter, answers)
         copied = _copy_to_clipboard(letter)
         console.print(
             "Letter copied to the clipboard. " if copied else "Copy the letter above. "
         )
         typer.launch(p["url"])
         if typer.confirm("Did you submit the application?", default=False):
+            # The record of what was sent: the whole form if it was read, else the
+            # screening answers you'd have copied from the list above.
+            sent_answers = form_answers or {k: answers.values[k] for k in QUESTIONS}
             mark_sent(
                 conn,
                 p,
                 letter=letter,
-                answers={k: answers.values[k] for k in QUESTIONS},
+                answers=sent_answers,
                 cv_file=CV_FILES[p["cv"]],
             )
             done["sent"] += 1

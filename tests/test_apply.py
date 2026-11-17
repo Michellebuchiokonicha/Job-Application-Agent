@@ -9,7 +9,9 @@ from typer.testing import CliRunner
 
 from jobagent import cli
 from jobagent.apply import answers as answers_module
+from jobagent.apply import profile as profile_module
 from jobagent.apply.answers import ASK_ME, QUESTIONS, AnswersError, load_answers
+from jobagent.apply.fill import question_key
 from jobagent.apply.letter import (
     Letter,
     LetterWriter,
@@ -24,8 +26,10 @@ from jobagent.core.store import (
     init_db,
     jobs_to_prepare,
     pack_counts,
+    save_answer,
     save_decision,
     save_score,
+    saved_answers,
     upsert_job,
 )
 from jobagent.match import cv as cv_module
@@ -493,3 +497,88 @@ def test_model_sizes_are_not_names():
         250,
     )
     assert problems == []
+
+
+# --- Reading the form in review (Lever) ----------------------------------------------------
+
+HEARD = "How did you hear about this job?"
+FORM = f"""
+<ul>
+  <li class="application-question"><label>
+    <div class="application-label">Full name<span class="required">✱</span></div>
+    <input type="text" name="name" required></label></li>
+</ul>
+<input type="hidden" name="cards[c1][baseTemplate]" value='{
+    json.dumps(
+        {
+            "fields": [
+                {
+                    "type": "dropdown",
+                    "required": True,
+                    "text": HEARD,
+                    "options": [{"text": "Job board"}, {"text": "Other"}],
+                },
+                {"type": "text", "required": True, "text": "Preferred name"},
+            ]
+        }
+    )
+}'>
+<textarea name="comments"></textarea>
+"""
+
+
+@pytest.fixture
+def lever_env(env, tmp_path, monkeypatch):
+    conn, _ = env
+    conn.execute("UPDATE jobs SET source = 'lever' WHERE external_id = '1'")
+    profile = tmp_path / "profile.toml"
+    profile.write_text('name = "Ada Example"\nemail = "ada@example.com"\n')
+    monkeypatch.setattr(profile_module, "DEFAULT_PROFILE_PATH", profile)
+    monkeypatch.setattr(cli, "_fetch_form_html", lambda url: FORM)
+    CliRunner().invoke(cli.app, ["apply", "prepare"])
+    return conn
+
+
+def test_review_asks_what_the_form_needs_and_saves_it(lever_env):
+    conn = lever_env
+    # Approve job 1 (Lever, tier A): pick "Other" (2), type a preferred name, submit.
+    out = (
+        CliRunner()
+        .invoke(cli.app, ["apply", "review"], input="a\n2\nAda\ny\nq\n")
+        .output
+    )
+    flat = " ".join(out.split())  # Rich wraps long lines in an 80-column test terminal
+    assert "1 answered from your profile" in flat and "2 need you" in flat
+    assert saved_answers(conn) == {
+        question_key(HEARD): "Other",
+        question_key("Preferred name"): "Ada",
+    }
+    sent = conn.execute(
+        "SELECT answers_json FROM application_packs WHERE status = 'sent'"
+    ).fetchone()
+    assert json.loads(sent["answers_json"])[HEARD] == "Other"  # the record of what went
+
+
+def test_the_next_form_with_the_same_question_fills_itself(lever_env):
+    conn = lever_env
+    save_answer(conn, question_key(HEARD), HEARD, "Job board")
+    save_answer(conn, question_key("Preferred name"), "Preferred name", "Ada")
+    out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\ny\nq\n").output
+    flat = " ".join(out.split())
+    assert "3 answered" in flat and "0 need you" in flat
+
+
+def test_a_choice_is_picked_by_number_so_it_is_always_a_real_option(lever_env):
+    out = (
+        CliRunner()
+        .invoke(cli.app, ["apply", "review"], input="a\nLinkedIn\n9\n1\nAda\ny\nq\n")
+        .output
+    )
+    assert out.count("Type number from the list.") == 2  # text and 9 both refused
+    assert saved_answers(lever_env)[question_key(HEARD)] == "Job board"
+
+
+def test_no_profile_falls_back_to_the_page(lever_env, tmp_path, monkeypatch):
+    monkeypatch.setattr(profile_module, "DEFAULT_PROFILE_PATH", tmp_path / "none.toml")
+    out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\ny\nq\n").output
+    assert "No profile yet" in out and "Sent 1" in out

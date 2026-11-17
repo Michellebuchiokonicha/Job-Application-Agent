@@ -7,8 +7,9 @@ covers gets None: it comes to you.
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 
-from jobagent.apply.answers import Answers
+from jobagent.apply.answers import ASK_ME, Answers
 from jobagent.apply.forms import Question
 
 # Lever's standard fields, by their name in the form -> the key in your profile.
@@ -43,6 +44,18 @@ def question_key(label: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", label.lower()))
 
 
+MULTI_SEPARATOR = "; "  # a multiple-select answer is stored as "English; French"
+
+
+def fits(q: Question, answer: str) -> bool:
+    """Whether an answer can go in this field: any text for a text box; for a choice,
+    exactly one of its options (each of them, for a multiple-select). Never the nearest."""
+    if not q.options:
+        return True
+    parts = answer.split(MULTI_SEPARATOR) if q.kind == "multiple-select" else [answer]
+    return all(part in q.options for part in parts)
+
+
 def known_answer(
     q: Question,
     profile: dict[str, str],
@@ -58,17 +71,49 @@ def known_answer(
         return profile.get(PROFILE_FIELDS[q.field]) or None
 
     label = q.label.lower()
-    answer = None
+    candidates = []
     for words, key in SCREENING:
         if any(w in label for w in words):
-            answer = answers.get(key)  # None for a missing or "ask_me" answer
+            if answers.values.get(key, "").strip() == ASK_ME:
+                return None  # "ask me" means every time, never a saved answer
+            candidates.append(answers.get(key))
             break
-    else:  # no screening question matched: maybe you've answered it before
-        answer = (saved or {}).get(question_key(q.label))
-    if answer is None:
-        return None  # not a question you've answered: never guessed
+    # An earlier answer to this exact question: used when there's no screening answer,
+    # or when the screening answer doesn't fit this form's options (a sentence about
+    # your visa can't go in a Yes/No box, but your Yes/No from last time can).
+    candidates.append((saved or {}).get(question_key(q.label)))
+    return next((a for a in candidates if a is not None and fits(q, a)), None)
 
-    # A choice question takes exactly one of its options. Never the nearest one.
-    if q.options and answer not in q.options:
-        return None
-    return answer
+
+@dataclass
+class FormPlan:
+    filled: dict[str, str] = field(default_factory=dict)  # form field -> answer
+    needs_you: list[Question] = field(default_factory=list)  # required, no answer
+    left_empty: list[Question] = field(default_factory=list)  # optional, no answer
+
+
+def plan_form(
+    questions: list[Question],
+    profile: dict[str, str],
+    answers: Answers,
+    saved: Mapping[str, str],
+    letter: str,
+) -> FormPlan:
+    """Sort a form into what's filled, what needs you, and optional fields left empty.
+    The CV upload is handled by the browser step; the letter goes in the comments box."""
+    plan = FormPlan()
+    for q in questions:
+        if q.kind == "file":
+            continue
+        answer = (
+            letter
+            if q.field == "comments"
+            else known_answer(q, profile, answers, saved)
+        )
+        if answer:
+            plan.filled[q.field] = answer
+        elif q.required:
+            plan.needs_you.append(q)
+        else:
+            plan.left_empty.append(q)
+    return plan
