@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, ValidationError
 from jobagent.inbox.classify import ChatClient
 from jobagent.match.filters import based_abroad
 
-PROMPT_VERSION = "v8"  # v8: at most 40 requirements, all from the ad
+PROMPT_VERSION = "v9"  # v9: at most 30 requirements (40 didn't fit the output cap)
 MAX_JOB_CHARS = 8000
 # Ollama's default context window can be as small as 2-4k tokens; CV + ad + answer need more.
 # Without this, the start of the prompt is silently cut off.
@@ -30,9 +30,9 @@ NUM_CTX = 16384
 # Guards against a runaway model (it once ran 5 hours on one job). Hitting the output cap
 # means a loop, or drifting from the ad into listing the whole CV; the timeout catches the rest.
 NUM_PREDICT = 4096
-# One requirement is ~55 tokens of JSON, so 40 is ~2,200: room left for the rest of the
-# answer. Real ads have 15-30; more means the model is listing the CV, not the ad.
-MAX_REQUIREMENTS = 40
+# One requirement is ~100-120 tokens of JSON (quotes are whole sentences), so 30 is
+# ~3,500 of the 4,096 cap. Real ads have 10-30; more means the model is listing the CV.
+MAX_REQUIREMENTS = 30
 MODEL_TIMEOUT = 300  # seconds per call
 
 
