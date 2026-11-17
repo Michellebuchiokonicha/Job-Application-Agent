@@ -94,7 +94,7 @@ _DASH = re.compile(r"—|\s–\s|\s--\s")
 _PLACEHOLDER = re.compile(r"\[[^\]]*\]|\{[^}]*\}|<[^>]*>")
 _NUMBER = re.compile(r"\d[\d,.]*%?")
 # Hyphens, slashes and apostrophes split words: "LLM-powered", "CI/CD", "PLATE's".
-_NAME = re.compile(r"[A-Za-z][A-Za-z0-9+#.&]*")
+_NAME = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9+#.&]*")
 # Capitalised words that are fine without appearing in the CV or the ad.
 _OK_WORDS = """
     i dear hiring manager team kind regards best thank thanks yours sincerely

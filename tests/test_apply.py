@@ -439,3 +439,17 @@ def test_redo_redrafts_unsent_letters_but_keeps_sent_ones(env):
     assert "Redrafting 1 unsent letter(s)" in out
     assert pack_counts(conn) == {"sent": 1, "prepared": 1}
     assert writer.calls[-1] == ("ML Engineer", "B")
+
+
+def test_model_sizes_are_not_names():
+    # "8B" in "Llama 3.1 8B" was flagged as an unknown name "B".
+    cv = CV + "Evaluated Llama 3.1 8B and Qwen2.5 7B.\n"
+    problems, _ = check_letter(
+        letter("I evaluated Llama 3.1 8B and Qwen2.5 7B with Python."),
+        cv,
+        AD,
+        "AI Engineer",
+        "Beta Labs",
+        250,
+    )
+    assert problems == []

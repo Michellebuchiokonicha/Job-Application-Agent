@@ -46,9 +46,19 @@ _OFF_TOPIC_AUTOMATION = re.compile(
 _AI_WORD = re.compile(r"\b(ai|ml|machine learning|llm|gen ?ai|intelligent|agentic)\b")
 
 
+# Not hands-on full-time roles, even when an AI word or team name matches: "Technical
+# Program Manager, Forward Deployed Engineering", "ML Internship". ("New Grad" stays.)
+_NOT_THIS_KIND_OF_ROLE = re.compile(
+    r"\b(manager|director|head of|vice president|vp|recruiter|sales|account executive|"
+    r"intern|internship|placement|apprentice(ship)?)\b"
+)
+
+
 def matches_role(title: str) -> bool:
     t = title.lower()
     if not any(p.search(t) for p in _ROLE_PATTERNS):
+        return False
+    if _NOT_THIS_KIND_OF_ROLE.search(t):
         return False
     off_topic = "automation" in t and _OFF_TOPIC_AUTOMATION.search(t)
     return not (off_topic and not _AI_WORD.search(t))
@@ -145,6 +155,35 @@ def region_for(location: str) -> Region:
     return Region.ENGLAND
 
 
+# Company boards are worldwide, so a board job needs a positive UK signal: an English
+# place we know, "UK"/"England" in the text, or UK-remote. Reed only lists UK jobs, so
+# there an unknown town defaults to England instead.
+_UK_SIGNAL = re.compile(r"\b(uk|u\.k\.|united kingdom|england|great britain)\b")
+_ENGLAND_CITIES = re.compile(
+    r"\b(manchester|birmingham|leeds|liverpool|newcastle|sheffield|nottingham|leicester|"
+    r"coventry|(?<!new )york|bradford|sunderland|derby|hull|plymouth|norwich|warrington|preston|"
+    r"lancaster|durham|middlesbrough|lincoln|peterborough|ipswich|colchester)\b"
+)
+# "Cambridge, MA", "Richmond, VA", "London, ON": English names, other countries. A
+# two-letter code after a comma that isn't UK/GB means a US state or Canadian province.
+_FOREIGN_TWIN = re.compile(
+    r",\s*(?!UK\b|GB\b)[A-Z]{2}\b|\b(USA|United States|Canada)\b"
+)
+
+
+def board_region(location: str) -> Region:
+    """Best region among a board job's places, e.g. "San Francisco; London" -> LONDON."""
+    best = Region.EXCLUDED
+    for part in re.split(r"[;|]|\s/\s", location):
+        loc = part.lower().strip()
+        if not loc or _FOREIGN_TWIN.search(part) or _EXCLUDED.search(loc):
+            continue
+        known = (_LONDON, _SOUTH, _ENGLAND_CITIES, _UK_SIGNAL)
+        if any(pattern.search(loc) for pattern in known):
+            best = min(best, region_for(part))
+    return best
+
+
 @dataclass(frozen=True)
 class Verdict:
     keep: bool
@@ -166,14 +205,26 @@ def based_abroad(text: str) -> bool:
     return bool(_ABROAD.search(text or ""))
 
 
-def check(job: Job, today: date, max_age_days: int = 14) -> Verdict:
-    region = region_for(job.location)
+def check(
+    job: Job, today: date, max_age_days: int | None = 14, *, worldwide: bool = False
+) -> Verdict:
+    """Keep or drop a job. `worldwide`: a company board, not a UK job site.
+
+    Board jobs skip the age check (max_age_days=None): a job still on a company's own
+    board is still open, however long ago it was first posted.
+    """
+    region = board_region(job.location) if worldwide else region_for(job.location)
     if not matches_role(job.title):
         return Verdict(False, "title not a target role", region)
     if region is Region.EXCLUDED:
-        return Verdict(False, "outside England", region)
+        reason = "not in England or UK-remote" if worldwide else "outside England"
+        return Verdict(False, reason, region)
     if based_abroad(job.description):
         return Verdict(False, "based outside the UK", region)
-    if job.posted_at and job.posted_at < today - timedelta(days=max_age_days):
+    if (
+        max_age_days is not None
+        and job.posted_at
+        and job.posted_at < today - timedelta(days=max_age_days)
+    ):
         return Verdict(False, f"older than {max_age_days} days", region)
     return Verdict(True, "", region)

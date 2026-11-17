@@ -1,0 +1,271 @@
+# Companies whose job boards `jobs fetch` reads: every open job, filtered to target roles
+# in the UK. Each slug was checked against the ATS's public API (a wrong slug fails loudly).
+#
+# To add one: find the company's careers page. If it's on boards.greenhouse.io/<slug>,
+# jobs.lever.co/<slug> or jobs.ashbyhq.com/<slug>, add a [[company]] block with that slug.
+# For Lever companies hosted in the EU (jobs.eu.lever.co), add `eu = true`.
+
+[[company]]
+name = "Anthropic"
+ats = "greenhouse"
+slug = "anthropic"
+
+[[company]]
+name = "Databricks"
+ats = "greenhouse"
+slug = "databricks"
+
+[[company]]
+name = "Deliveroo"
+ats = "greenhouse"
+slug = "deliveroo"
+
+[[company]]
+name = "Datadog"
+ats = "greenhouse"
+slug = "datadog"
+
+[[company]]
+name = "GoCardless"
+ats = "greenhouse"
+slug = "gocardless"
+
+[[company]]
+name = "Graphcore"
+ats = "greenhouse"
+slug = "graphcore"
+
+[[company]]
+name = "Intercom"
+ats = "greenhouse"
+slug = "intercom"
+
+[[company]]
+name = "Isomorphic Labs"
+ats = "greenhouse"
+slug = "isomorphiclabs"
+
+[[company]]
+name = "Lighthouse"
+ats = "greenhouse"
+slug = "lighthouse"
+
+[[company]]
+name = "MongoDB"
+ats = "greenhouse"
+slug = "mongodb"
+
+[[company]]
+name = "Monzo"
+ats = "greenhouse"
+slug = "monzo"
+
+[[company]]
+name = "PolyAI"
+ats = "greenhouse"
+slug = "polyai"
+
+[[company]]
+name = "Prolific"
+ats = "greenhouse"
+slug = "prolific"
+
+[[company]]
+name = "Dataiku"
+ats = "greenhouse"
+slug = "dataiku"
+
+[[company]]
+name = "Scale AI"
+ats = "greenhouse"
+slug = "scaleai"
+
+[[company]]
+name = "Speechmatics"
+ats = "greenhouse"
+slug = "speechmatics"
+
+[[company]]
+name = "Stripe"
+ats = "greenhouse"
+slug = "stripe"
+
+[[company]]
+name = "Tide"
+ats = "greenhouse"
+slug = "tide"
+
+[[company]]
+name = "Together AI"
+ats = "greenhouse"
+slug = "togetherai"
+
+[[company]]
+name = "Apollo Research"
+ats = "lever"
+slug = "apolloresearch"
+
+[[company]]
+name = "Healx"
+ats = "lever"
+slug = "healx"
+
+[[company]]
+name = "Palantir"
+ats = "lever"
+slug = "palantir"
+
+[[company]]
+name = "Baseten"
+ats = "ashby"
+slug = "baseten"
+
+[[company]]
+name = "Causaly"
+ats = "ashby"
+slug = "causaly"
+
+[[company]]
+name = "Cognition"
+ats = "ashby"
+slug = "cognition"
+
+[[company]]
+name = "Cohere"
+ats = "ashby"
+slug = "cohere"
+
+[[company]]
+name = "Cursor"
+ats = "ashby"
+slug = "cursor"
+
+[[company]]
+name = "Decagon"
+ats = "ashby"
+slug = "decagon"
+
+[[company]]
+name = "ElevenLabs"
+ats = "ashby"
+slug = "elevenlabs"
+
+[[company]]
+name = "Faculty"
+ats = "ashby"
+slug = "faculty"
+
+[[company]]
+name = "Harvey"
+ats = "ashby"
+slug = "harvey"
+
+[[company]]
+name = "LangChain"
+ats = "ashby"
+slug = "langchain"
+
+[[company]]
+name = "Lovable"
+ats = "ashby"
+slug = "lovable"
+
+[[company]]
+name = "Marshmallow"
+ats = "ashby"
+slug = "marshmallow"
+
+[[company]]
+name = "Modal"
+ats = "ashby"
+slug = "modal"
+
+[[company]]
+name = "Motorway"
+ats = "ashby"
+slug = "motorway"
+
+[[company]]
+name = "Multiverse"
+ats = "ashby"
+slug = "multiverse"
+
+[[company]]
+name = "n8n"
+ats = "ashby"
+slug = "n8n"
+
+[[company]]
+name = "OpenAI"
+ats = "ashby"
+slug = "openai"
+
+[[company]]
+name = "Oxa"
+ats = "ashby"
+slug = "oxa"
+
+[[company]]
+name = "Paddle"
+ats = "ashby"
+slug = "paddle"
+
+[[company]]
+name = "Perplexity"
+ats = "ashby"
+slug = "perplexity"
+
+[[company]]
+name = "Plaid"
+ats = "ashby"
+slug = "plaid"
+
+[[company]]
+name = "Poolside"
+ats = "ashby"
+slug = "poolside"
+
+[[company]]
+name = "Quantexa"
+ats = "ashby"
+slug = "quantexa"
+
+[[company]]
+name = "Sierra"
+ats = "ashby"
+slug = "sierra"
+
+[[company]]
+name = "Snyk"
+ats = "ashby"
+slug = "snyk"
+
+[[company]]
+name = "StackOne"
+ats = "ashby"
+slug = "stackone"
+
+[[company]]
+name = "Synthesia"
+ats = "ashby"
+slug = "synthesia"
+
+[[company]]
+name = "Trainline"
+ats = "ashby"
+slug = "trainline"
+
+[[company]]
+name = "Wayve"
+ats = "ashby"
+slug = "wayve"
+
+[[company]]
+name = "Writer"
+ats = "ashby"
+slug = "writer"
+
+[[company]]
+name = "Zego"
+ats = "ashby"
+slug = "zego"

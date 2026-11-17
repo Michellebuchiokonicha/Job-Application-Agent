@@ -123,6 +123,8 @@ def test_bad_key_fails_loudly():
         "AI Automation Engineer",
         "Intelligent Automation Developer",
         "AI Test Automation Engineer",  # off-topic word, but AI rescues it
+        "Forward Deployed Software Engineer, New Grad",  # graduate roles are for you
+        "Member of Technical Staff (Machine Learning Engineer)",
     ],
 )
 def test_target_roles_match(title):
@@ -138,6 +140,12 @@ def test_target_roles_match(title):
         "Sales Executive",
         "Test Automation Engineer",  # software testing, a different career
         "PLC Automation Engineer",  # factory automation
+        # An AI word or team name, but not a hands-on full-time role:
+        "Technical Program Manager, Forward Deployed Engineering",
+        "Engineering Manager, Machine Learning",
+        "Machine Learning Engineer Internship",
+        "Forward Deployed Software Engineer, Internship",
+        "AI Sales Engineer",
     ],
 )
 def test_other_roles_do_not_match(title):

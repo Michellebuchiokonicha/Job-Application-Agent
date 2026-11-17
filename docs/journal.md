@@ -568,3 +568,33 @@ Lessons: **a check passing is not the same as the output being right**, only tha
 fail the things the check looks at. And the "try 3 first" step only works if those 3 are
 read before anything is sent: the review queue should make that the default, not rely on
 me remembering.
+
+## More jobs: company boards on Greenhouse, Lever and Ashby
+
+47 jobs from one source wasn't enough to apply to 50 a day. Most tech and AI companies host
+their careers page on an ATS (applicant tracking system), and Greenhouse, Lever and Ashby
+each publish a free, public, no-login API per company that lists **every open job with the
+full ad**. A list of companies therefore covers "company websites" without scraping.
+
+I checked about 120 likely UK AI employers against all three APIs and kept the 53 that
+answered and had UK jobs (`sources/companies.toml`). A dry run on the real APIs: 7,727 open
+jobs, 140 of them target roles in England or UK-remote, 3x what Reed gave, all direct from
+the company.
+
+What had to change, because these boards are worldwide and Reed is UK-only:
+
+- **Location needs a positive UK signal.** Reed lists only UK jobs, so an unknown town
+  defaulted to England. On a worldwide board, "Remote" or "San Francisco" must not. Each
+  place in a multi-location string ("San Francisco; London") is judged separately.
+  English names abroad ("Cambridge, MA", "Richmond, VA", "London, ON") are ruled out by
+  the state or province code; and "New York" had matched "York" until a test caught it.
+- **No age limit on board jobs.** A job still on a company's own board is still open,
+  however long ago it was posted.
+- **The full ad is saved at fetch time**, so scoring never asks Reed for a non-Reed job.
+- **Title filter**: managers, sales, internships and placements are dropped even when a
+  team name matches ("Technical Program Manager, Forward Deployed Engineering").
+- **One failing board is named, not hidden**, and doesn't stop the rest.
+
+A testing lesson: when `jobs fetch` started reading the boards by default, the existing
+fetch tests began calling 53 real APIs and the suite hung. A shared autouse fixture now
+swaps in a fake boards client for every test: tests never touch the network.

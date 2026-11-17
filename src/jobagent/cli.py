@@ -615,41 +615,78 @@ def _make_reed(settings: Settings):
     return ReedClient(settings.reed_api_key)
 
 
+def _make_boards():
+    """The company-boards client. A separate function so tests can swap it."""
+    from jobagent.sources.boards import BoardsClient
+
+    return BoardsClient()
+
+
 @jobs_app.command("fetch")
 def jobs_fetch(
-    days: Annotated[int, typer.Option(help="Ignore jobs posted longer ago.")] = 14,
+    days: Annotated[
+        int, typer.Option(help="Reed: ignore jobs posted longer ago.")
+    ] = 14,
     max_per_search: Annotated[
-        int, typer.Option(help="Results to read per search term.")
+        int, typer.Option(help="Reed: results to read per search term.")
     ] = 200,
+    source: Annotated[
+        str, typer.Option(help="all, reed, or boards (company job boards).")
+    ] = "all",
 ) -> None:
     """Search the job sources, filter, and store new matches."""
     import httpx
 
-    from jobagent.sources.feed import fetch_jobs
+    from jobagent.sources.boards import load_companies
+    from jobagent.sources.feed import fetch_boards, fetch_jobs
 
+    if source not in {"all", "reed", "boards"}:
+        console.print("--source must be all, reed or boards.")
+        raise typer.Exit(2)
     settings = Settings.from_env()
     conn = _open_db(settings)
-    reed = _make_reed(settings)
-    try:
-        stats = fetch_jobs(
-            conn, reed.search, datetime.now(UTC).date(), max_per_search, days
+    today = datetime.now(UTC).date()
+    new = 0
+
+    if source in {"all", "reed"}:
+        reed = _make_reed(settings)
+        try:
+            stats = fetch_jobs(conn, reed.search, today, max_per_search, days)
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            hint = " (check REED_API_KEY in .env)" if code in (401, 403) else ""
+            console.print(f"[red]Reed returned HTTP {code}{hint}.[/]")
+            raise typer.Exit(1) from e
+        except httpx.TransportError as e:
+            console.print(f"[red]Couldn't reach Reed:[/] {e}")
+            raise typer.Exit(1) from e
+        new += stats.new
+        console.print(
+            f"Reed: {stats.seen} results, {stats.unique} distinct jobs, "
+            f"[green]{stats.kept} match[/] ({stats.new} new)."
         )
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        hint = " (check REED_API_KEY in .env)" if code in (401, 403) else ""
-        console.print(f"[red]Reed returned HTTP {code}{hint}.[/]")
-        raise typer.Exit(1) from e
-    except httpx.TransportError as e:
-        console.print(f"[red]Couldn't reach Reed:[/] {e}")
-        raise typer.Exit(1) from e
+        for reason, n in stats.dropped.most_common():
+            console.print(f"  dropped {n}: {reason}")
+
+    if source in {"all", "boards"}:
+        companies = load_companies()
+        with console.status(f"Reading {len(companies)} company job boards..."):
+            boards = fetch_boards(conn, _make_boards(), companies, today)
+        new += boards.new
+        console.print(
+            f"Company boards: {boards.companies} companies, {boards.unique} open jobs, "
+            f"[green]{boards.kept} match[/] ({boards.new} new)."
+        )
+        for reason, n in boards.dropped.most_common():
+            console.print(f"  dropped {n}: {reason}")
+        if boards.failed:
+            console.print(f"[yellow]  Couldn't read {len(boards.failed)} board(s):[/]")
+            for line in boards.failed:
+                console.print(f"    {line}", markup=False, style="yellow")
 
     console.print(
-        f"Reed: {stats.seen} results, {stats.unique} distinct jobs, "
-        f"[green]{stats.kept} match[/] ({stats.new} new)."
+        f"[dim]{new} new job(s). Next: uv run jobagent jobs score · jobs list[/]"
     )
-    for reason, n in stats.dropped.most_common():
-        console.print(f"  dropped {n}: {reason}")
-    console.print("[dim]See them with: uv run jobagent jobs list[/]")
 
 
 @jobs_app.command("list")
@@ -761,6 +798,8 @@ def jobs_score(
         task = progress.add_task("Scoring", total=len(rows))
         for row in rows:
             description = row["full_description"]
+            if description is None and row["source"] != "reed":
+                description = row["description"]  # boards give the whole ad up front
             if description is None:
                 try:
                     description = reed.full_description(row["external_id"])

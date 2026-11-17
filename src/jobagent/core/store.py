@@ -599,6 +599,14 @@ def save_score(
     )
 
 
+def job_id(conn: sqlite3.Connection, job: "Job") -> int:
+    """The stored row id of a job (by its source's own ID)."""
+    return conn.execute(
+        "SELECT id FROM jobs WHERE source = ? AND external_id = ?",
+        (job.source, job.external_id),
+    ).fetchone()["id"]
+
+
 def same_job_stored(conn: sqlite3.Connection, job: "Job") -> bool:
     """Is this job already stored under a *different* ID?
 
