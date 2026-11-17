@@ -1,8 +1,12 @@
 """known_answer: which approved answer fits which form question. Made-up profile."""
 
+import pytest
+
 from jobagent.apply.answers import Answers
-from jobagent.apply.fill import known_answer
+from jobagent.apply.fill import known_answer, question_key
 from jobagent.apply.forms import Question
+from jobagent.apply.profile import ProfileError, load_profile
+from jobagent.core.store import connect, init_db, save_answer, saved_answers
 
 PROFILE = {
     "name": "Ada Example",
@@ -89,3 +93,65 @@ def test_choice_answer_must_be_one_of_the_options():
 def test_unknown_question_comes_to_you():
     assert ask(label="Give us three numbers that describe you") is None
     assert ask(label="Why do you want to work here?", kind="textarea") is None
+
+
+# --- Saved answers: the same question on another form ------------------------------------
+
+
+def test_question_key_ignores_case_punctuation_and_spacing():
+    assert question_key("How did you hear about us?") == "how did you hear about us"
+    assert question_key("  HOW did you hear about   us ") == "how did you hear about us"
+    assert question_key("How did you find us?") != question_key("How did you hear?")
+
+
+def test_saved_answer_is_reused_for_the_same_question():
+    saved = {question_key("Which university did you last attend?"): "Acme University"}
+    assert ask(label="Which university did you last attend?") is None  # not saved: you
+    q = Question(
+        "cards[y][field0]", "WHICH university did you last attend", "text", True
+    )
+    assert known_answer(q, PROFILE, ANSWERS, saved) == "Acme University"
+
+
+def test_saved_choice_answer_still_has_to_be_an_option():
+    saved = {question_key("How did you hear about us?"): "LinkedIn"}
+    q = Question(
+        "f", "How did you hear about us?", "dropdown", True, ("Job board", "Other")
+    )
+    assert (
+        known_answer(q, PROFILE, ANSWERS, saved) is None
+    )  # this form has no "LinkedIn"
+
+
+def test_screening_answers_win_over_saved_ones():
+    label = "Will you now or in the future require sponsorship?"
+    saved = {question_key(label): "Yes"}  # an old answer must not override answers.toml
+    assert (
+        known_answer(Question("f", label, "text", True), PROFILE, ANSWERS, saved)
+        == "No"
+    )
+
+
+def test_save_and_load_answers():
+    conn = connect()
+    init_db(conn)
+    save_answer(conn, "k", "Question?", "first")
+    save_answer(conn, "k", "Question?", "second")  # answering again replaces it
+    assert saved_answers(conn) == {"k": "second"}
+
+
+# --- Profile file ----------------------------------------------------------------------
+
+
+def test_profile_missing_file_says_how_to_create_it(tmp_path):
+    with pytest.raises(ProfileError, match="No profile yet"):
+        load_profile(tmp_path / "profile.toml")
+
+
+def test_profile_loads_and_rejects_typos(tmp_path):
+    path = tmp_path / "profile.toml"
+    path.write_text('name = "Ada Example"\nemail = "ada@example.com"\n')
+    assert load_profile(path) == {"name": "Ada Example", "email": "ada@example.com"}
+    path.write_text('emial = "ada@example.com"\n')
+    with pytest.raises(ProfileError, match="unknown keys: emial"):
+        load_profile(path)

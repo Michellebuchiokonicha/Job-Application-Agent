@@ -178,6 +178,15 @@ CREATE TABLE IF NOT EXISTS application_packs (
     updated_at       TEXT NOT NULL,
     PRIMARY KEY (source, external_id)
 );
+
+-- Answers you've given to form questions, reused when another form asks the same thing.
+-- Keyed by the question's normalised wording (apply.fill.question_key).
+CREATE TABLE IF NOT EXISTS saved_answers (
+    question_key  TEXT PRIMARY KEY,
+    label         TEXT NOT NULL,     -- the question as you first saw it
+    answer        TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 """
 
 
@@ -799,3 +808,26 @@ def pack_counts(conn: sqlite3.Connection) -> dict[str, int]:
         "SELECT status, COUNT(*) AS n FROM application_packs GROUP BY status"
     ).fetchall()
     return {r["status"]: r["n"] for r in rows}
+
+
+# ---- Saved answers to form questions ----------------------------------------------------
+
+
+def save_answer(conn: sqlite3.Connection, key: str, label: str, answer: str) -> None:
+    """Remember your answer to a question, replacing any earlier one."""
+    conn.execute(
+        """
+        INSERT INTO saved_answers (question_key, label, answer, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (question_key) DO UPDATE
+        SET label = excluded.label, answer = excluded.answer,
+            updated_at = excluded.updated_at
+        """,
+        (key, label, answer, _now()),
+    )
+
+
+def saved_answers(conn: sqlite3.Connection) -> dict[str, str]:
+    """Every saved answer, by question key."""
+    rows = conn.execute("SELECT question_key, answer FROM saved_answers").fetchall()
+    return {r["question_key"]: r["answer"] for r in rows}

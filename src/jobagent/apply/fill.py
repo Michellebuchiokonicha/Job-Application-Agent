@@ -5,6 +5,9 @@ Three sources, all yours: your profile (name, email, links), your screening answ
 covers gets None: it comes to you.
 """
 
+import re
+from collections.abc import Mapping
+
 from jobagent.apply.answers import Answers
 from jobagent.apply.forms import Question
 
@@ -33,8 +36,24 @@ SCREENING = [
 ]
 
 
-def known_answer(q: Question, profile: dict[str, str], answers: Answers) -> str | None:
-    """The approved answer to this question, or None if it has to come to you."""
+def question_key(label: str) -> str:
+    """A question's wording reduced to lowercase words, so the same question matches
+    across forms despite case, punctuation or spacing: "How did you hear about us?" and
+    "how did you hear about us" are one question. Different wording is a different one."""
+    return " ".join(re.findall(r"[a-z0-9]+", label.lower()))
+
+
+def known_answer(
+    q: Question,
+    profile: dict[str, str],
+    answers: Answers,
+    saved: Mapping[str, str] | None = None,
+) -> str | None:
+    """The approved answer to this question, or None if it has to come to you.
+
+    Sources, in order: your profile, your screening answers, then answers you gave to
+    the same question on an earlier form (`saved`, by question_key).
+    """
     if q.field in PROFILE_FIELDS:
         return profile.get(PROFILE_FIELDS[q.field]) or None
 
@@ -44,6 +63,8 @@ def known_answer(q: Question, profile: dict[str, str], answers: Answers) -> str 
         if any(w in label for w in words):
             answer = answers.get(key)  # None for a missing or "ask_me" answer
             break
+    else:  # no screening question matched: maybe you've answered it before
+        answer = (saved or {}).get(question_key(q.label))
     if answer is None:
         return None  # not a question you've answered: never guessed
 
