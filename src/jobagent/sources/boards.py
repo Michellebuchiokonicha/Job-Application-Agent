@@ -32,6 +32,7 @@ class Company:
     ats: str  # "greenhouse", "lever" or "ashby"
     slug: str  # the company's ID on that ATS, e.g. boards.greenhouse.io/<slug>
     eu: bool = False  # Lever only: hosted on api.eu.lever.co
+    careers: str = ""  # the company's own careers page, when the ATS's pages are off
 
 
 def load_companies(path: Path = COMPANIES_FILE) -> list[Company]:
@@ -106,7 +107,8 @@ def parse_ashby(item: dict, company: Company) -> Job:
         title=(item.get("title") or "").strip(),
         company=company.name,
         location="; ".join(loc for loc in locations if loc),
-        url=item.get("jobUrl") or "",
+        # Some companies switch off Ashby's pages and list jobs only on their own site.
+        url=company.careers or item.get("jobUrl") or "",
         description=description.strip(),
         posted_at=_date_from_iso(item.get("publishedAt")),
     )

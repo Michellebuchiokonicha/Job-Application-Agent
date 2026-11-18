@@ -4,6 +4,8 @@
 # To add one: find the company's careers page. If it's on boards.greenhouse.io/<slug>,
 # jobs.lever.co/<slug> or jobs.ashbyhq.com/<slug>, add a [[company]] block with that slug.
 # For Lever companies hosted in the EU (jobs.eu.lever.co), add `eu = true`.
+# If the ATS's own job pages don't load (the company shows jobs only on its own site),
+# add `careers = "<that site>"`: jobs then link there instead.
 
 [[company]]
 name = "Anthropic"
@@ -139,6 +141,7 @@ slug = "cohere"
 name = "Cursor"
 ats = "ashby"
 slug = "cursor"
+careers = "https://cursor.com/careers"  # Cursor switched off its Ashby pages (404)
 
 [[company]]
 name = "Decagon"

@@ -422,7 +422,8 @@ def upsert_job(conn: sqlite3.Connection, job: "Job", region: int) -> bool:
                           description, salary_min, salary_max, posted_at,
                           first_seen_at, last_seen_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (source, external_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        ON CONFLICT (source, external_id) DO UPDATE
+        SET last_seen_at = excluded.last_seen_at, url = excluded.url  -- links can move
         """,
         (
             job.source,

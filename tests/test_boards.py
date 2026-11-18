@@ -233,3 +233,10 @@ def test_fetch_command_reports_boards(tmp_path, monkeypatch):
     )
     out = CliRunner().invoke(cli.app, ["jobs", "fetch", "--source", "boards"]).output
     assert "Company boards:" in out and "1 match" in out and "1 new job(s)" in out
+
+
+def test_ashby_job_links_to_the_careers_site_when_ashby_pages_are_off():
+    company = Company("Acme AI", "ashby", "acmeai", careers="https://acme.ai/careers")
+    item = {"id": "u-2", "title": "AI Engineer", "jobUrl": "https://jobs.ashbyhq.com/x"}
+    assert parse_ashby(item, company).url == "https://acme.ai/careers"
+    assert parse_ashby(item, ACME_AB).url == "https://jobs.ashbyhq.com/x"  # default
