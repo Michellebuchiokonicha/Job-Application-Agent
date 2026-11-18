@@ -240,3 +240,13 @@ def test_ashby_job_links_to_the_careers_site_when_ashby_pages_are_off():
     item = {"id": "u-2", "title": "AI Engineer", "jobUrl": "https://jobs.ashbyhq.com/x"}
     assert parse_ashby(item, company).url == "https://acme.ai/careers"
     assert parse_ashby(item, ACME_AB).url == "https://jobs.ashbyhq.com/x"  # default
+
+
+def test_careers_url_can_name_the_job_page_after_its_title():
+    company = Company(
+        "Acme", "ashby", "acme", careers="https://acme.ai/careers/{title}"
+    )
+    item = {"id": "u-3", "title": "Forward Deployed Engineer, Western Europe"}
+    assert parse_ashby(item, company).url == (
+        "https://acme.ai/careers/forward-deployed-engineer-western-europe"
+    )

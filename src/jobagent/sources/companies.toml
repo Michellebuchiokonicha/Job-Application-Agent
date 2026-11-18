@@ -5,7 +5,8 @@
 # jobs.lever.co/<slug> or jobs.ashbyhq.com/<slug>, add a [[company]] block with that slug.
 # For Lever companies hosted in the EU (jobs.eu.lever.co), add `eu = true`.
 # If the ATS's own job pages don't load (the company shows jobs only on its own site),
-# add `careers = "<that site>"`: jobs then link there instead.
+# add `careers = "<that site>"`: jobs then link there instead. "{title}" in it becomes
+# the job title as a URL slug, for sites that name job pages after the title.
 
 [[company]]
 name = "Anthropic"
@@ -141,7 +142,7 @@ slug = "cohere"
 name = "Cursor"
 ats = "ashby"
 slug = "cursor"
-careers = "https://cursor.com/careers"  # Cursor switched off its Ashby pages (404)
+careers = "https://cursor.com/careers/{title}"  # Ashby pages switched off (404)
 
 [[company]]
 name = "Decagon"

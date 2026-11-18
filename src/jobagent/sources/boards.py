@@ -11,6 +11,7 @@ Docs:
 """
 
 import html
+import re
 import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -94,6 +95,14 @@ def parse_lever(item: dict, company: Company) -> Job:
     )
 
 
+def _careers_url(template: str, title: str) -> str:
+    """The job's page on the company's own site. "{title}" in the template becomes the
+    title as a URL slug: "Forward Deployed Engineer, Western Europe" ->
+    "forward-deployed-engineer-western-europe" (how cursor.com names its job pages)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return template.replace("{title}", slug)
+
+
 def parse_ashby(item: dict, company: Company) -> Job:
     locations = [item.get("location") or ""] + [
         loc.get("location") or "" for loc in item.get("secondaryLocations") or []
@@ -108,7 +117,9 @@ def parse_ashby(item: dict, company: Company) -> Job:
         company=company.name,
         location="; ".join(loc for loc in locations if loc),
         # Some companies switch off Ashby's pages and list jobs only on their own site.
-        url=company.careers or item.get("jobUrl") or "",
+        url=_careers_url(company.careers, item.get("title") or "")
+        or item.get("jobUrl")
+        or "",
         description=description.strip(),
         posted_at=_date_from_iso(item.get("publishedAt")),
     )
