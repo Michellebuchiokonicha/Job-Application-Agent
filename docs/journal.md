@@ -712,3 +712,52 @@ each (often an ad requirement written up as my experience). Now, if a sentence i
 unbacked after the redraft and nothing else is wrong, code removes it instead of
 flagging the letter, as long as the opening and two more sentences remain. The removed
 sentence is shown as a warning in review. Shorter but true beats flagged.
+
+## Forms on all three boards, and submitting
+
+Ashby was the last board without a filler, and the largest (51 of 137 prepared letters).
+Its form comes from the same public data its own pages use, and every question on the
+page sits in a container marked with the question's ID, so each answer goes inside its
+own question: two "Yes" buttons on one form can't be confused. A dry run on a real form
+with placeholder answers, never submitted, filled every field before any code was kept.
+One company (Cursor) had switched its Ashby pages off; its jobs now link to its own site.
+
+`apply review --submit` lets the agent click Submit after I approve, but only counts an
+application as sent when the site shows confirmation text that wasn't on the page before
+the click (an ad that says "thank you for your interest" can't fake it). It saves the
+filled form as a screenshot first. A CAPTCHA, an unanswered required field or no
+confirmation hands the page to me. A daily cap (40) turns it back to manual.
+
+## v1 lessons: the test list v2 starts from
+
+v1 is done: it finds jobs, scores them, writes checked letters and fills and submits
+forms on three boards. v2 is a fresh repo, test-first, built as an agent. Every failure
+below happened here, and each becomes one of v2's first tests.
+
+**Models (small, local)**
+- An error message is a hypothesis. "Model looping" was really drift from the ad into
+  the CV: keep the raw output of any failed call.
+- A small model copies the prompt: labels ("JOB: title at company" became a heading),
+  examples ("contract (not permanent)" became every job's concern), instructions
+  ("best matches the requirement" became 93 letters' filler) and words in "don't" rules
+  ("don't say 'aligns with'", "no 'led'"). Describe what to write, not what to avoid.
+- Seeing the CV while listing an ad's requirements, it lists the CV. Extract from the
+  ad without the CV (v2: a separate step).
+- It writes what the ad asks for as the candidate's experience. Every claim must trace
+  to the CV; the model check misses some, so exact code checks back it up (numbers,
+  names, upgrade words like "led").
+- Before trusting a new check, run it on outputs already passed (60 hidden failures).
+- Removing an unbacked sentence beats flagging the whole letter, if enough is left.
+
+**The web**
+- A "Page not found" can come with HTTP 200: check what the page shows, not its status.
+- Boards change: one switched its pages off; links must update on re-fetch.
+- Read forms from data where it exists (Greenhouse API, Lever JSON, Ashby form data);
+  fill by each question's own container; never pick "the nearest" option.
+- Some pages block hidden browsers; real ones mostly don't.
+
+**Process**
+- Tests never touch the network or a real browser (a fixture for each).
+- A threshold the user doesn't need (score under 50) is a cost, not a safety.
+- When a rule changes, failing tests are the to-do list.
+- Commit after the proof, not before.

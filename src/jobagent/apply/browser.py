@@ -5,6 +5,7 @@ hands over: you check the page and submit it yourself. A field it can't fill (a 
 form, a custom widget) is named, not skipped silently, and left for you.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,8 @@ FIELD_TIMEOUT_MS = 5_000  # a field that isn't there fails fast, instead of hang
 class FillResult:
     filled: list[str] = field(default_factory=list)  # question labels
     failed: list[str] = field(default_factory=list)  # left for you, with the reason
+    submitted: bool = False  # clicked Submit and the site confirmed it
+    screenshot: str = ""  # the filled form, saved just before submitting
 
 
 def _css(value: str) -> str:
@@ -96,7 +99,94 @@ def fill_greenhouse_form(
     return result
 
 
-FILLERS = {"lever": fill_lever_form, "greenhouse": fill_greenhouse_form}
+def fill_ashby_form(
+    page, questions: list[Question], answers: dict[str, str], cv_path: Path | None
+) -> FillResult:
+    """Put each answer in its field on an open Ashby form. `answers` is by field path.
+
+    Every question sits in a container marked data-field-path="<path>", so each answer
+    is placed inside its own question: two "Yes" buttons on one form can't be confused.
+    """
+    result = FillResult()
+    _upload_cv(
+        page,
+        '[data-field-path="_systemfield_resume"] input[type="file"]',
+        cv_path,
+        result,
+    )
+    for q in questions:
+        box = f'[data-field-path="{_css(q.field)}"]'
+        answer = answers.get(q.field)
+        if q.kind in ("file", "unsupported"):
+            if q.required and q.field != "_systemfield_resume":
+                result.failed.append(f"{q.label} (do this one on the page)")
+            continue
+        if not answer:
+            continue
+        try:
+            if q.kind == "multiple-choice" and set(q.options) == {"Yes", "No"}:
+                page.locator(box).get_by_role("button", name=answer, exact=True).click()
+            elif q.kind in ("multiple-choice", "dropdown", "multiple-select"):
+                for part in answer.split(MULTI_SEPARATOR):
+                    page.locator(box).get_by_label(part, exact=True).check()
+            elif q.kind == "location":
+                # A search box: type your location, take the first suggestion, and say
+                # which one it took (the only place a "nearest" match is allowed: it's
+                # your own location, and you see it before anything is sent).
+                page.locator(f"{box} input").fill(answer)
+                option = page.get_by_role("option").first
+                result.filled.append(f"{q.label}: {option.inner_text().strip()}")
+                option.click()
+                continue
+            else:
+                page.locator(f"{box} input, {box} textarea").first.fill(answer)
+            result.filled.append(q.label)
+        except Exception as e:  # noqa: BLE001
+            result.failed.append(f"{q.label} ({type(e).__name__})")
+    return result
+
+
+FILLERS = {
+    "lever": fill_lever_form,
+    "greenhouse": fill_greenhouse_form,
+    "ashby": fill_ashby_form,
+}
+
+
+# The site's own confirmation after Submit. Counted before and after the click, so text
+# already on the page ("Thank you for your interest" in the ad) can't fake a success.
+_CONFIRMED = (
+    r"thank you for (applying|your application)|thanks for applying|"
+    r"application (was |has been )?(successfully )?(submitted|received)|"
+    r"we('ve| have) received your application"
+)
+_COUNT_JS = "p => (document.body.innerText.match(new RegExp(p, 'gi')) || []).length"
+_SUBMIT_BUTTON = re.compile(r"^\s*submit( your)?( application)?\s*$", re.IGNORECASE)
+SUBMIT_TIMEOUT_MS = 20_000
+
+# Wait for these before filling: Ashby and Greenhouse build their forms in the browser.
+_READY = {
+    "lever": 'input[name="name"]',
+    "greenhouse": '[id="first_name"]',
+    "ashby": "[data-field-path]",
+}
+
+
+def submit_and_confirm(page) -> bool:
+    """Click Submit, then wait for the site to confirm. False means it didn't (a
+    CAPTCHA, a validation error, a slow site): the application may not have gone."""
+    before = page.evaluate(_COUNT_JS, _CONFIRMED)
+    page.get_by_role("button", name=_SUBMIT_BUTTON).first.click()
+    try:
+        page.wait_for_function(
+            "([p, n]) => (document.body.innerText.match(new RegExp(p, 'gi')) || [])"
+            ".length > n",
+            arg=[_CONFIRMED, before],
+            timeout=SUBMIT_TIMEOUT_MS,
+        )
+        return True
+    except Exception:  # noqa: BLE001 (no confirmation: treated as not sent)
+        return False
 
 
 def open_and_fill(
@@ -106,19 +196,32 @@ def open_and_fill(
     cv_path: Path | None,
     hand_over: Callable[[FillResult], bool],
     ats: str = "lever",
+    screenshot: Path | None = None,
 ) -> bool:
-    """Open the form in Chrome, fill it, then hand over to you. The browser stays open
-    until `hand_over` returns (it asks whether you submitted); returns its answer."""
+    """Open the form in Chrome, fill it, then hand over to you; returns whether it was
+    sent. With `screenshot` (submit mode) and nothing left for you, it also clicks
+    Submit itself, after saving the filled form there as your record."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
-        # Your installed Chrome, visible: you watch it fill, then check and submit.
+        # Your installed Chrome, visible: you can watch, and take over if it stops.
         browser = pw.chromium.launch(channel="chrome", headless=False)
         try:
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded")
             page.set_default_timeout(FIELD_TIMEOUT_MS)
+            page.wait_for_selector(_READY[ats], timeout=SUBMIT_TIMEOUT_MS)
             result = FILLERS[ats](page, questions, answers, cv_path)
+            if screenshot is not None and not result.failed:
+                screenshot.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                page.screenshot(path=str(screenshot), full_page=True)
+                result.screenshot = str(screenshot)
+                result.submitted = submit_and_confirm(page)
+                if not result.submitted:
+                    result.failed.append(
+                        "no confirmation after Submit (a CAPTCHA or an error on the "
+                        "page?): check it, finish it yourself if needed"
+                    )
             return hand_over(result)
         finally:
             browser.close()

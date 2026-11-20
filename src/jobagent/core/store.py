@@ -834,3 +834,13 @@ def saved_answers(conn: sqlite3.Connection) -> dict[str, str]:
     """Every saved answer, by question key."""
     rows = conn.execute("SELECT question_key, answer FROM saved_answers").fetchall()
     return {r["question_key"]: r["answer"] for r in rows}
+
+
+def sent_today(conn: sqlite3.Connection) -> int:
+    """Applications marked sent today (UTC), for the daily submission cap."""
+    today = datetime.now(UTC).date().isoformat()
+    return conn.execute(
+        "SELECT COUNT(*) FROM application_packs WHERE status = 'sent' "
+        "AND updated_at >= ?",
+        (today,),
+    ).fetchone()[0]

@@ -16,6 +16,8 @@ from jobagent.apply.forms import Question
 PROFILE_FIELDS = {
     "name": "name",
     "email": "email",
+    "_systemfield_name": "name",  # Ashby
+    "_systemfield_email": "email",  # Ashby
     "phone": "phone",
     "location": "location",
     "org": "current_company",
@@ -76,6 +78,10 @@ def _profile_answer(q: Question, profile: dict[str, str]) -> str | None:
         return " ".join(name[1:]) or None
     if q.field in PROFILE_FIELDS:
         return profile.get(PROFILE_FIELDS[q.field]) or None
+    if q.kind == "phone":
+        return profile.get("phone") or None
+    if q.kind == "location":
+        return profile.get("location") or None
     if q.kind == "text":
         label = q.label.lower()
         for words, key in _PROFILE_LABELS:
@@ -133,13 +139,12 @@ def plan_form(
     The CV upload is handled by the browser step; the letter goes in the cover letter box."""
     plan = FormPlan()
     for q in questions:
-        if q.kind == "file":
-            continue
-        answer = (
-            letter
-            if q.field in LETTER_FIELDS
-            else known_answer(q, profile, answers, saved)
+        if q.kind in ("file", "unsupported"):
+            continue  # uploads and odd widgets: the browser step handles or names them
+        is_letter_box = q.field in LETTER_FIELDS or (
+            q.kind == "textarea" and "cover letter" in q.label.lower()
         )
+        answer = letter if is_letter_box else known_answer(q, profile, answers, saved)
         if answer:
             plan.filled[q.field] = answer
         elif q.required:

@@ -1,5 +1,6 @@
 """Command-line entry point: `uv run jobagent ...`."""
 
+import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1312,11 +1313,26 @@ def _fetch_form_json(url: str) -> dict:
     return response.json()
 
 
+def _post_form_json(url: str, body: dict) -> dict:
+    """A form definition from an API that takes a POST (Ashby). Swapped in tests."""
+    import httpx
+
+    from jobagent.sources.base import USER_AGENT
+
+    response = httpx.post(
+        url, json=body, headers={"User-Agent": USER_AGENT}, timeout=30
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _read_form(p):
     """(questions, the form's page) for a job whose form can be read, else None."""
     from jobagent.apply.forms import (
+        ashby_urls,
         greenhouse_urls,
         lever_apply_url,
+        parse_ashby_questions,
         parse_greenhouse_questions,
         parse_lever_form,
     )
@@ -1327,7 +1343,10 @@ def _read_form(p):
     if p["source"] == "greenhouse":
         api, url = greenhouse_urls(p["external_id"])
         return parse_greenhouse_questions(_fetch_form_json(api)), url
-    return None
+    if p["source"] == "ashby" and p["url"].startswith("https://jobs.ashbyhq.com/"):
+        api, body, url = ashby_urls(p["external_id"])
+        return parse_ashby_questions(_post_form_json(api, body)), url
+    return None  # e.g. an Ashby company that shows jobs only on its own site
 
 
 def _complete_form(conn, p, letter: str, answers):
@@ -1338,7 +1357,7 @@ def _complete_form(conn, p, letter: str, answers):
     from jobagent.apply.profile import ProfileError, load_profile
     from jobagent.core.store import save_answer, saved_answers
 
-    if p["source"] not in ("lever", "greenhouse"):
+    if p["source"] not in ("lever", "greenhouse", "ashby"):
         return None
     try:
         profile = load_profile()
@@ -1346,7 +1365,10 @@ def _complete_form(conn, p, letter: str, answers):
         console.print(Text(str(e), style="yellow"))
         return None
     try:
-        questions, form_url = _read_form(p)
+        form = _read_form(p)
+        if form is None:
+            return None
+        questions, form_url = form
     except Exception as e:  # noqa: BLE001 (any failure: fall back to the page)
         console.print(f"[yellow]Couldn't read the form ({e}); fill it on the page.[/]")
         return None
@@ -1376,17 +1398,36 @@ def _print_form_answers(questions, by_field: dict[str, str], letter: str) -> Non
             console.print(Text(f"  {q.label}: ", style="dim") + Text(answer))
 
 
+SCREENSHOT_DIR = Path.home() / ".local" / "share" / "jobagent" / "screenshots"
+
+
 def _fill_in_browser(
-    p, questions, by_field: dict[str, str], form_url: str, letter: str
+    p,
+    questions,
+    by_field: dict[str, str],
+    form_url: str,
+    letter: str,
+    submit: bool = False,
 ) -> bool:
-    """Open the form in Chrome, fill it, and ask (while it's still open) whether you
-    submitted. If the browser can't start, you get the answers to copy instead."""
+    """Open the form in Chrome and fill it. With `submit`, the agent clicks Submit when
+    nothing's left for you and the site confirms; otherwise it asks (while the page is
+    still open) whether you submitted. No browser: you get the answers to copy."""
     from jobagent.apply.browser import open_and_fill
     from jobagent.match.cv import CV_FILES, DEFAULT_CV_DIR
 
     cv_path = DEFAULT_CV_DIR / CV_FILES[p["cv"]]
+    shot = None
+    if submit:
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{p['source']}-{p['external_id']}")
+        shot = SCREENSHOT_DIR / f"{name}.png"
 
     def hand_over(result) -> bool:
+        if result.submitted:
+            console.print(
+                f"[green]Submitted ✓ ({len(result.filled)} fields; the site confirmed "
+                f"it). Filled form saved: {result.screenshot}[/]"
+            )
+            return True
         console.print(f"[green]Filled {len(result.filled)} field(s) in the browser.[/]")
         for failed in result.failed:
             console.print(Text(f"  ✗ fill this yourself: {failed}", style="yellow"))
@@ -1397,7 +1438,13 @@ def _fill_in_browser(
 
     try:
         return open_and_fill(
-            form_url, questions, by_field, cv_path, hand_over, ats=p["source"]
+            form_url,
+            questions,
+            by_field,
+            cv_path,
+            hand_over,
+            ats=p["source"],
+            screenshot=shot,
         )
     except Exception as e:  # noqa: BLE001 (no browser: fall back to copying by hand)
         console.print(f"[yellow]Couldn't open the browser ({e}).[/]")
@@ -1446,11 +1493,22 @@ def apply_recheck() -> None:
 
 
 @apply_app.command("review")
-def apply_review() -> None:
-    """Approve each application, then send it yourself. Nothing is sent without you.
+def apply_review(
+    submit: Annotated[
+        bool,
+        typer.Option(
+            help="After you approve, the agent submits the form itself (when every "
+            "required answer is known and the site confirms). Off: you submit."
+        ),
+    ] = False,
+    max_submits: Annotated[
+        int, typer.Option(help="Daily cap on agent submissions; then you submit.")
+    ] = 40,
+) -> None:
+    """Approve each application. Nothing is sent without your approval.
 
-    a: approve (copies the letter, opens the application page; you submit, then confirm)
-    e: edit the letter · s: skip for now · r: reject (never apply) · o: open the ad · q: quit
+    a: approve (fills the form; with --submit, sends it too) · e: edit the letter
+    s: skip for now · r: reject (never apply) · o: open the ad · q: quit
     """
     import json
 
@@ -1462,6 +1520,7 @@ def apply_review() -> None:
         packs_to_review,
         reject_pack,
         save_decision,
+        sent_today,
         update_pack_letter,
     )
     from jobagent.match.cv import CV_FILES, DEFAULT_CV_DIR, load_cv
@@ -1537,7 +1596,14 @@ def apply_review() -> None:
         form = _complete_form(conn, p, letter, answers)
         if form is not None:
             questions, by_field, form_url = form
-            submitted = _fill_in_browser(p, questions, by_field, form_url, letter)
+            agent_submits = submit and sent_today(conn) < max_submits
+            if submit and not agent_submits:
+                console.print(
+                    f"[yellow]Daily cap of {max_submits} reached: you submit.[/]"
+                )
+            submitted = _fill_in_browser(
+                p, questions, by_field, form_url, letter, submit=agent_submits
+            )
         else:
             copied = _copy_to_clipboard(letter)
             console.print(
@@ -1571,3 +1637,19 @@ def apply_review() -> None:
     console.print(
         f"Sent {done['sent']} · rejected {done['rejected']} · skipped {done['skipped']}."
     )
+
+
+@app.command("daily")
+def daily() -> None:
+    """The morning run: fetch new jobs, score them, write their letters. Then review.
+
+    Each step only does what's new, so running it twice costs little.
+    Schedule it (cron or launchd) to have letters waiting when you sit down.
+    """
+    console.rule("1/3 Fetch")
+    jobs_fetch(days=14, max_per_search=200, source="all")
+    console.rule("2/3 Score")
+    jobs_score(limit=None, rescore=False)
+    console.rule("3/3 Letters")
+    apply_prepare(limit=None, redo=False, redo_flagged=False)
+    console.print("\nNext: uv run jobagent apply review --submit")

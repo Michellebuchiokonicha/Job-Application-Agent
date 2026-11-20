@@ -118,3 +118,76 @@ def parse_greenhouse_questions(data: dict) -> list[Question]:
                 )
             )
     return questions
+
+
+# ---- Ashby ------------------------------------------------------------------------------
+
+# Ashby's application form, as its own job pages load it (public, no login).
+ASHBY_FORM_QUERY = """
+query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) {
+  jobPosting(organizationHostedJobsPageName: $organizationHostedJobsPageName,
+             jobPostingId: $jobPostingId) {
+    applicationForm { sections { fieldEntries {
+      ... on FormFieldEntry { isRequired field }
+    } } }
+  }
+}"""
+
+# Ashby's field types -> ours. Yes/No questions become a two-option choice.
+_ASHBY_KINDS = {
+    "String": "text",
+    "Url": "text",
+    "Number": "text",
+    "Email": "email",
+    "Phone": "phone",
+    "LongText": "textarea",
+    "File": "file",
+    "Boolean": "multiple-choice",
+    "ValueSelect": "dropdown",
+    "MultiValueSelect": "multiple-select",
+    "Location": "location",
+}
+
+
+def ashby_urls(external_id: str) -> tuple[str, dict, str]:
+    """(form API, its request body, form page) for an Ashby job stored as "<org>:<id>"."""
+    org, job_id = external_id.split(":", 1)
+    body = {
+        "operationName": "ApiJobPosting",
+        "variables": {"organizationHostedJobsPageName": org, "jobPostingId": job_id},
+        "query": ASHBY_FORM_QUERY,
+    }
+    return (
+        "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting",
+        body,
+        f"https://jobs.ashbyhq.com/{org}/{job_id}/application",
+    )
+
+
+def parse_ashby_questions(data: dict) -> list[Question]:
+    """Every question on an Ashby form, from its API response. Types it can't fill
+    (a date picker, say) are left out only if optional; required ones come to you."""
+    posting = (data.get("data") or {}).get("jobPosting")
+    if not posting:
+        raise ValueError("Ashby returned no form: the job may have closed")
+    questions: list[Question] = []
+    for section in posting["applicationForm"]["sections"]:
+        for entry in section["fieldEntries"]:
+            f = entry.get("field") or {}
+            required = bool(entry.get("isRequired"))
+            kind = _ASHBY_KINDS.get(f.get("type", ""))
+            if kind is None and not required:
+                continue
+            options = [v.get("label", "") for v in f.get("selectableValues") or []]
+            if f.get("type") == "Boolean":
+                options = ["Yes", "No"]
+            questions.append(
+                Question(
+                    field=f["path"],
+                    label=(f.get("title") or "").strip(),
+                    kind=kind or "unsupported",
+                    required=required,
+                    options=tuple(options),
+                )
+            )
+    return questions

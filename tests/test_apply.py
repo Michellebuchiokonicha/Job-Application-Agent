@@ -603,7 +603,9 @@ def test_approve_fills_the_form_in_the_browser_and_records_it(lever_env, monkeyp
     conn = lever_env
     seen = {}
 
-    def fake_open_and_fill(url, questions, answers, cv_path, hand_over, ats):
+    def fake_open_and_fill(
+        url, questions, answers, cv_path, hand_over, ats, screenshot
+    ):
         seen.update(url=url, answers=answers, cv=cv_path.name, ats=ats)
         return hand_over(browser_module.FillResult(filled=["Full name"]))
 
@@ -695,7 +697,9 @@ def test_greenhouse_form_is_read_from_the_api_and_filled(env, tmp_path, monkeypa
     )
     seen = {}
 
-    def fake_open_and_fill(url, questions, answers, cv_path, hand_over, ats):
+    def fake_open_and_fill(
+        url, questions, answers, cv_path, hand_over, ats, screenshot
+    ):
         seen.update(url=url, answers=answers, ats=ats)
         return hand_over(browser_module.FillResult())
 
@@ -801,3 +805,136 @@ def test_recheck_flags_letters_a_new_check_would_catch(env):
         "SELECT COUNT(*) FROM application_packs WHERE problems_json != '[]'"
     ).fetchone()[0]
     assert flagged == 3
+
+
+ASHBY_FORM = {
+    "data": {
+        "jobPosting": {
+            "applicationForm": {
+                "sections": [
+                    {
+                        "fieldEntries": [
+                            {
+                                "isRequired": True,
+                                "field": {
+                                    "path": "_systemfield_name",
+                                    "title": "Name",
+                                    "type": "String",
+                                },
+                            },
+                            {
+                                "isRequired": True,
+                                "field": {
+                                    "path": "p1",
+                                    "title": "Will you now or in the future require "
+                                    "visa sponsorship?",
+                                    "type": "Boolean",
+                                },
+                            },
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+}
+
+
+def _as_ashby(conn, tmp_path, monkeypatch, url):
+    conn.execute(
+        "UPDATE jobs SET source = 'ashby', external_id = 'acme:9', url = ? "
+        "WHERE external_id = '1'",
+        (url,),
+    )
+    profile = tmp_path / "profile.toml"
+    profile.write_text('name = "Ada Example"\n')
+    monkeypatch.setattr(profile_module, "DEFAULT_PROFILE_PATH", profile)
+    monkeypatch.setattr(cli, "_post_form_json", lambda url, body: ASHBY_FORM)
+    CliRunner().invoke(cli.app, ["apply", "prepare"])
+
+
+def test_ashby_form_is_read_and_filled(env, tmp_path, monkeypatch):
+    conn, _ = env
+    _as_ashby(conn, tmp_path, monkeypatch, "https://jobs.ashbyhq.com/acme/9")
+    seen = {}
+
+    def fake_open_and_fill(
+        url, questions, answers, cv_path, hand_over, ats, screenshot
+    ):
+        seen.update(url=url, answers=answers, ats=ats)
+        return hand_over(browser_module.FillResult())
+
+    monkeypatch.setattr(browser_module, "open_and_fill", fake_open_and_fill)
+    # The test answers file has text, not Yes/No, for sponsorship: so it's asked (2 = No).
+    out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\n2\ny\nq\n").output
+    assert seen["ats"] == "ashby"
+    assert seen["url"] == "https://jobs.ashbyhq.com/acme/9/application"
+    assert seen["answers"] == {"_systemfield_name": "Ada Example", "p1": "No"}
+    assert "Sent 1" in out
+
+
+def test_ashby_job_on_a_company_site_falls_back_to_the_page(env, tmp_path, monkeypatch):
+    conn, _ = env
+    _as_ashby(conn, tmp_path, monkeypatch, "https://acme.ai/careers/ai-engineer")
+    out = CliRunner().invoke(cli.app, ["apply", "review"], input="a\ny\nq\n").output
+    assert "Form:" not in out and "Sent 1" in out  # no form read: you fill the page
+
+
+# --- Submit mode -------------------------------------------------------------------------
+
+
+def _review_with_fake_browser(lever_env, monkeypatch, args, submitted):
+    seen = {}
+
+    def fake(url, questions, answers, cv_path, hand_over, ats, screenshot):
+        seen["screenshot"] = screenshot
+        result = browser_module.FillResult(filled=["Full name"])
+        if screenshot is not None:  # submit mode: the agent clicks Submit
+            result.submitted, result.screenshot = submitted, str(screenshot)
+            if not submitted:
+                result.failed.append("no confirmation after Submit")
+        return hand_over(result)
+
+    monkeypatch.setattr(browser_module, "open_and_fill", fake)
+    out = (
+        CliRunner()
+        .invoke(cli.app, ["apply", "review", *args], input="a\n2\nAda\ny\nq\n")
+        .output
+    )
+    return seen, out
+
+
+def test_submit_mode_sends_without_asking_once_the_site_confirms(
+    lever_env, monkeypatch
+):
+    seen, out = _review_with_fake_browser(lever_env, monkeypatch, ["--submit"], True)
+    assert seen["screenshot"].name == "lever-1.png"  # the filled form, kept as a record
+    assert "Submitted ✓" in out and "Did you submit" not in out
+    assert "Sent 1" in out
+
+
+def test_submit_mode_without_confirmation_asks_you(lever_env, monkeypatch):
+    _, out = _review_with_fake_browser(lever_env, monkeypatch, ["--submit"], False)
+    assert "no confirmation after Submit" in out and "Did you submit" in out
+
+
+def test_without_submit_flag_the_agent_never_submits(lever_env, monkeypatch):
+    seen, _ = _review_with_fake_browser(lever_env, monkeypatch, [], True)
+    assert seen["screenshot"] is None
+
+
+def test_daily_cap_switches_submit_off(lever_env, monkeypatch):
+    seen, out = _review_with_fake_browser(
+        lever_env, monkeypatch, ["--submit", "--max-submits", "0"], True
+    )
+    assert seen["screenshot"] is None and "Daily cap of 0 reached" in out
+
+
+def test_daily_runs_fetch_score_and_letters_in_order(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "jobs_fetch", lambda **kw: calls.append("fetch"))
+    monkeypatch.setattr(cli, "jobs_score", lambda **kw: calls.append("score"))
+    monkeypatch.setattr(cli, "apply_prepare", lambda **kw: calls.append("letters"))
+    out = CliRunner().invoke(cli.app, ["daily"]).output
+    assert calls == ["fetch", "score", "letters"]
+    assert "apply review --submit" in out
